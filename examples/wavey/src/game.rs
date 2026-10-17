@@ -53,10 +53,9 @@ impl PillGame for Game {
         //engine.add_system("rotation_system", rotation_system)?;
         engine.add_system("evolve_waves", evolve_waves)?;
         engine.add_system("player_movement_system", player_movement_system)?;
+        engine.add_system("update_bombs", update_bombs)?;
         // --- Visuals setup ---
         crate::visuals::start(engine, active_scene)?;
-        // Add render passes
-        engine.add_render_pass(Box::new(CartoonPass::new()))?;
 
         // --- Camera scale UI ---
 
@@ -79,7 +78,6 @@ impl PillGame for Game {
         // -- initialize the wave component --
         engine.add_global_component(GameState {
             bombs: Vec::new(),
-            last_bomb: 0,
             water_points: (0..128)
                 .map(|i| WaterPoint {
                     x: i as f32 / 127.0,
@@ -95,19 +93,6 @@ impl PillGame for Game {
 
 // --- Systems ---
 
-fn rotation_system(engine: &mut Engine) -> Result<()> {
-    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
-    #[cfg(debug_assertions)]
-    println!("Delta time: {}", delta_time);
-
-    for (_, transform_component, _) in
-        engine.iterate_two_components_mut::<TransformComponent, TagAlphaComponent>()?
-    {
-        transform_component.rotate_around_axis(90.0 * delta_time, Vector3f::new(0.0, 1.0, 0.0));
-    }
-
-    Ok(())
-}
 fn evolve_waves(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
     #[cfg(debug_assertions)]
@@ -172,39 +157,39 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
 }
 
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
-    let input = engine.get_global_component::<InputComponent>()?;
+    // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
+    // which borrows `GameState` mutably.
+    let (movements, _wobbles, drop_bombs, delta_time) = {
+        let input = engine.get_global_component::<InputComponent>()?;
 
-    // movements
-    let movements: [(f32, f32); NUM_PLAYERS as usize] = {
-        std::array::from_fn(|i| {
+        // movements
+        let movements: [(f32, f32); NUM_PLAYERS as usize] = std::array::from_fn(|i| {
             let id = PlayerId::try_from(i as u8).unwrap();
             let l_stick_y = input.get_gamepad_axis(id, GamepadAxis::LeftStickY);
             let l_stick_x = input.get_gamepad_axis(id, GamepadAxis::LeftStickX);
             (l_stick_x, l_stick_y)
-        })
-    };
+        });
 
-    // wobbles
-    let wobbles: [(f32, f32); NUM_PLAYERS as usize] = {
-        std::array::from_fn(|i| {
+        // wobbles
+        let wobbles: [(f32, f32); NUM_PLAYERS as usize] = std::array::from_fn(|i| {
             let id = PlayerId::try_from(i as u8).unwrap();
             let r_stick_y = input.get_gamepad_axis(id, GamepadAxis::RightStickY);
             let r_stick_x = input.get_gamepad_axis(id, GamepadAxis::RightStickX);
             (r_stick_x, r_stick_y)
-        })
+        });
+
+        // actions: drop a bomb
+        let drop_bombs: [bool; NUM_PLAYERS as usize] = std::array::from_fn(|i| {
+            let id = PlayerId::try_from(i as u8).unwrap();
+            input.get_gamepad_button_pressed(id, GamepadButton::A)
+        });
+
+        let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
+        (movements, wobbles, drop_bombs, delta_time)
     };
 
-    // actions
-    //drop a bomb
-    let bomb_pressed: [bool; NUM_PLAYERS as usize] = {
-        std::array::from_fn(|i| { let id = PlayerId::try_from(i as u8).unwrap();
-            let pressed = input.get_gamepad_button_pressed(id, GamepadButton::A)};
-            pressed
-            if pressed {
-                add_bomb(engine).unwrap();
-            }
-        )
-
+    if drop_bombs.iter().any(|pressed| *pressed) {
+        add_bomb(engine)?;
     }
 
     // TODO: debug - this just moves one player
@@ -213,8 +198,6 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     //    input.get_key(KeyboardKey::KeyS),
     //    input.get_key(KeyboardKey::KeyA),
     //    input.get_key(KeyboardKey::KeyD));
-
-    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
 
     for (_, transform_component, player_component) in
         engine.iterate_two_components_mut::<TransformComponent, PlayerComponent>()?
@@ -283,9 +266,7 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
             .collect();
 
         // Remove bombs that have detonated
-        game_state
-            .bombs
-            .retain(|bomb| bomb.time_to_detonate > 0.0);
+        game_state.bombs.retain(|bomb| bomb.time_to_detonate > 0.0);
 
         detonated_bombs
     };
