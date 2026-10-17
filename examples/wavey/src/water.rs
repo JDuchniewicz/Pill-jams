@@ -106,9 +106,9 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
 
         // Acceleration at the new positions (fixed ends count as 0)
         for i in 1..n - 1 {
-            let left = if i == 1 { 0.0 } else { next_y[i - 1] };
+            let left = if i == 1 { next_y[1] } else { next_y[i - 1] };
             let center = next_y[i];
-            let right = if i == n - 2 { 0.0 } else { next_y[i + 1] };
+            let right = if i == n - 2 { next_y[n-2] } else { next_y[i + 1] };
 
             let laplacian = left - 2.0 * center + right;
             let acceleration = WAVE_SPEED * WAVE_SPEED * laplacian / (dx * dx);
@@ -120,12 +120,14 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
         }
 
         // Reflective boundaries: ends are fixed
-        points[0].velocity = 0.0;
-        points[0].y = 0.0;
-        points[0].horizontal_velocity_delta = 0.0;
-        points[0].vertical_velocity_delta = 0.0;
-        points[n - 1].velocity = 0.0;
-        points[n - 1].y = 0.0;
+        points[0].velocity = points[1].velocity;
+        points[0].y = points[1].y;
+        points[0].horizontal_velocity_delta = points[1].horizontal_velocity_delta;
+        points[0].vertical_velocity_delta = points[1].vertical_velocity_delta;
+        points[n - 1].velocity = points[n - 2].velocity;
+        points[n - 1].y = points[n - 2].y;
+        points[n - 1].horizontal_velocity_delta = points[n - 2].horizontal_velocity_delta;
+        points[n - 1].vertical_velocity_delta = points[n - 2].vertical_velocity_delta;
     }
 
     // Safety net: never let non-finite values reach the mesh builder.
