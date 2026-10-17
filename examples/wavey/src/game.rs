@@ -25,9 +25,9 @@ define_global_component!(GameState{
    water_points: Vec<WaterPoint>,
 });
 const INFLUENCE_RADIUS: f32 = 0.1;
-const MAX_VELOCITY: f32 = 5.0;
-const KICK_STRENGTH: f32 = 1.0;
-
+const MAX_VELOCITY: f32 = 200.0;
+const KICK_STRENGTH: f32 = 150.0;
+const TIME_TO_DETONATE: f32 = 1.0;
 // Orthographic size shared with the egui overlay (updated by `camera_zoom_system`).
 // `Arc<Mutex<_>>` allows the UI callback (which only receives `&egui::Context`) to read it.
 define_global_component!(GameUIStateComponent {
@@ -48,6 +48,18 @@ impl PillGame for Game {
         engine.register_component::<AudioListenerComponent>(active_scene)?;
         engine.register_component::<AudioSourceComponent>(active_scene)?;
         engine.register_component::<PlayerComponent>(active_scene)?;
+
+        // --- Game state (must exist before visuals builds the water mesh) ---
+        engine.add_global_component(GameState {
+            bombs: Vec::new(),
+            water_points: (0..128)
+                .map(|i| WaterPoint {
+                    x: i as f32 / 127.0,
+                    y: 0.0,
+                    velocity: 0.0,
+                })
+                .collect(),
+        })?;
 
         // Add game systems
         //engine.add_system("rotation_system", rotation_system)?;
@@ -75,18 +87,6 @@ impl PillGame for Game {
                 });
         })?;
 
-        // -- initialize the wave component --
-        engine.add_global_component(GameState {
-            bombs: Vec::new(),
-            water_points: (0..128)
-                .map(|i| WaterPoint {
-                    x: i as f32 / 127.0,
-                    y: 0.0,
-                    velocity: 0.0,
-                })
-                .collect(),
-        })?;
-
         Ok(())
     }
 }
@@ -96,8 +96,7 @@ impl PillGame for Game {
 fn evolve_waves(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
     #[cfg(debug_assertions)]
-    println!("Delta time: {}", delta_time);
-
+    //println!("Delta time: {}", delta_time);
     let game_state = engine.get_global_component_mut::<GameState>()?;
     let points = &mut game_state.water_points;
     let n = points.len();
@@ -181,6 +180,11 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         // actions: drop a bomb
         let drop_bombs: [bool; NUM_PLAYERS as usize] = std::array::from_fn(|i| {
             let id = PlayerId::try_from(i as u8).unwrap();
+            println!(
+                "Player {} pressed A: {}",
+                i,
+                input.get_gamepad_button_pressed(id, GamepadButton::A)
+            );
             input.get_gamepad_button_pressed(id, GamepadButton::A)
         });
 
@@ -240,7 +244,7 @@ fn add_bomb(engine: &mut Engine) -> Result<()> {
     let bomb = Bomb {
         x: DEBUG_X,
         y: DEBUG_Y,
-        time_to_detonate: 5.0,
+        time_to_detonate: TIME_TO_DETONATE,
     };
 
     game_state.bombs.push(bomb);
