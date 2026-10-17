@@ -1,5 +1,6 @@
 use crate::background_pass::{BackgroundQuadPass, SkyParams};
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
+use crate::water_mesh::WaterLookParams;
 use pill_engine::{define_global_component, game::*};
 
 use std::sync::{Arc, Mutex};
@@ -14,6 +15,7 @@ define_global_component!(GameUIStateComponent {
     // shading. Read by `WaterMeshPass`.
     show_uv2: Arc<Mutex<bool>>,
     sky: Arc<Mutex<SkyParams>>,
+    water_look: Arc<Mutex<WaterLookParams>>,
 });
 
 pub struct Game {}
@@ -55,12 +57,14 @@ impl PillGame for Game {
         let draw_background = Arc::new(Mutex::new(true));
         let show_uv2 = Arc::new(Mutex::new(false));
         let sky = Arc::new(Mutex::new(SkyParams::default()));
+        let water_look = Arc::new(Mutex::new(WaterLookParams::default()));
         engine.add_global_component(GameUIStateComponent {
             ortho_size: Arc::clone(&ortho_size),
             draw_sprite_bounds: Arc::clone(&draw_sprite_bounds),
             draw_background: Arc::clone(&draw_background),
             show_uv2: Arc::clone(&show_uv2),
             sky: Arc::clone(&sky),
+            water_look: Arc::clone(&water_look),
         })?;
         engine.set_game_overlay(move |ctx| {
             let ortho_size = *ortho_size
@@ -76,6 +80,9 @@ impl PillGame for Game {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut sky = sky.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut water_look = water_look
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             egui::Window::new("Wavey")
                 .resizable(true)
                 .default_width(260.0)
@@ -138,6 +145,19 @@ impl PillGame for Game {
                             ui.add(
                                 egui::Slider::new(&mut sky.sun_softness, 0.0..=1.0)
                                     .text("Softness"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Water look")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            color_row(ui, "Water top", &mut water_look.top_color);
+                            color_row(ui, "Water bottom", &mut water_look.bottom_color);
+                            color_row(ui, "Overlay top", &mut water_look.highlight_top);
+                            color_row(ui, "Overlay bottom", &mut water_look.highlight_bottom);
+                            ui.add(
+                                egui::Slider::new(&mut water_look.highlight_threshold, 0.0..=1.0)
+                                    .text("Overlay threshold"),
                             );
                         });
                 });

@@ -9,6 +9,38 @@ const FRAGMENT_SHADER: &str = include_str!("../res/shaders/water_mesh_fragment.w
 /// Name of the custom-shader "material" that draws procedural meshes as UV rainbows.
 pub const WATER_MESH_SHADER_NAME: &str = "water_mesh_shader";
 
+/// World Y range used by the water's vertical colour gradient.
+const WATER_GRADIENT_TOP_Y: f32 = 0.0;
+const WATER_GRADIENT_BOTTOM_Y: f32 = -100.0;
+
+/// Colours of the water shading, editable in the "Water look" panel.
+/// Mirrors `WaterLook` in water_mesh_fragment.hlsl (linear RGB).
+#[derive(Clone, Debug)]
+pub struct WaterLookParams {
+    /// Water colour at the top of the world gradient (near the surface).
+    pub top_color: [f32; 3],
+    /// Water colour at the bottom of the world gradient.
+    pub bottom_color: [f32; 3],
+    /// Overlay colour at the top of the gradient.
+    pub highlight_top: [f32; 3],
+    /// Overlay colour at the bottom of the gradient.
+    pub highlight_bottom: [f32; 3],
+    /// The overlay is applied where the (inverted) depth value is above this threshold.
+    pub highlight_threshold: f32,
+}
+
+impl Default for WaterLookParams {
+    fn default() -> Self {
+        Self {
+            top_color: [0.15, 0.45, 0.70],
+            bottom_color: [0.02, 0.08, 0.20],
+            highlight_top: [0.55, 0.85, 0.95],
+            highlight_bottom: [0.25, 0.60, 0.80],
+            highlight_threshold: 0.95,
+        }
+    }
+}
+
 const MAX_WATER_MESHES: usize = 16;
 
 /// Maximum number of water surface samples uploaded to the shader (one per simulated point).
@@ -46,6 +78,8 @@ struct WaterMeshPassState {
     surface_params_buffer: wgpu::Buffer,
     /// Water surface heights (world Y), uniformly spaced between x_min and x_max.
     surface_heights_buffer: wgpu::Buffer,
+    /// `WaterLook`: gradient and overlay colours (from the egui panel).
+    look_buffer: wgpu::Buffer,
     frame_bind_group: wgpu::BindGroup,
 }
 
@@ -124,6 +158,17 @@ impl Pass for WaterMeshPass {
                 },
                 count: None,
             },
+            // 4: water look colours (fragment)
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
         ]];
 
         let pipeline = renderer.create_pipeline(PipelineDesc {
@@ -178,6 +223,11 @@ impl Pass for WaterMeshPass {
             byte_size: (std::mem::size_of::<f32>() * MAX_SURFACE_SAMPLES) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         })?;
+        let look_buffer = renderer.create_buffer(BufferDesc {
+            label: Some("water_mesh_pass_look"),
+            byte_size: std::mem::size_of::<[[f32; 4]; 5]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        })?;
         let frame_bind_group =
             renderer
                 .get_device()
@@ -201,6 +251,10 @@ impl Pass for WaterMeshPass {
                             binding: 3,
                             resource: surface_heights_buffer.as_entire_binding(),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: look_buffer.as_entire_binding(),
+                        },
                     ],
                 });
 
@@ -210,6 +264,7 @@ impl Pass for WaterMeshPass {
             per_draw_buffer,
             surface_params_buffer,
             surface_heights_buffer,
+            look_buffer,
             frame_bind_group,
         });
         Ok(())
@@ -288,8 +343,8 @@ impl Pass for WaterMeshPass {
             heights = vec![0.0, 0.0];
         }
         // The egui overlay owns the flag; read it once per frame for the fragment shader.
-        let show_uv2 = world
-            .get_global::<GameUIStateComponent>()
+        let ui_state = world.get_global::<GameUIStateComponent>().ok();
+        let show_uv2 = ui_state
             .map(|state| {
                 *state
                     .show_uv2
@@ -297,11 +352,49 @@ impl Pass for WaterMeshPass {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
             })
             .unwrap_or(false);
+        let look = ui_state
+            .map(|state| {
+                state
+                    .water_look
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone()
+            })
+            .unwrap_or_default();
         queue.write_buffer(
             &state.surface_heights_buffer,
             0,
             bytemuck::cast_slice(&heights),
         );
+
+        let look_uniform: [[f32; 4]; 5] = [
+            [look.top_color[0], look.top_color[1], look.top_color[2], 1.0],
+            [
+                look.bottom_color[0],
+                look.bottom_color[1],
+                look.bottom_color[2],
+                1.0,
+            ],
+            [
+                look.highlight_top[0],
+                look.highlight_top[1],
+                look.highlight_top[2],
+                1.0,
+            ],
+            [
+                look.highlight_bottom[0],
+                look.highlight_bottom[1],
+                look.highlight_bottom[2],
+                1.0,
+            ],
+            [
+                look.highlight_threshold,
+                WATER_GRADIENT_TOP_Y,
+                WATER_GRADIENT_BOTTOM_Y,
+                0.0,
+            ],
+        ];
+        queue.write_buffer(&state.look_buffer, 0, bytemuck::bytes_of(&look_uniform));
         let surface_params: [u32; 8] = [
             heights.len() as u32,
             x_min.to_bits(),

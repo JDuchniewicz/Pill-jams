@@ -1,6 +1,6 @@
 // Water mesh fragment shader — the "water_mesh_shader" material (pill_assets generates the .wgsl).
-// Grayscale: the value is the vertical distance from the pixel to the water surface (the top
-// edge of the mesh), normalised by `max_depth`. Surface = black, bottom = white.
+// The water is shaded with a world-space vertical gradient, overlaid with a light highlight
+// gradient where the (inverted) depth value is above a threshold — i.e. near the surface.
 // An egui checkbox can switch to a debug view that visualises the second UV set instead.
 
 struct SurfaceParams {
@@ -16,6 +16,16 @@ struct SurfaceParams {
 [[vk::binding(2, 0)]] ConstantBuffer<SurfaceParams> surface_params;
 // Water surface height (world Y) per sample, uniformly spaced between x_min and x_max.
 [[vk::binding(3, 0)]] StructuredBuffer<float> surface_heights;
+
+// Water shading colours ("Water look" panel)
+struct WaterLook {
+    float4 top_color;        // rgb = water colour at the top of the world gradient
+    float4 bottom_color;     // rgb = water colour at the bottom
+    float4 highlight_top;    // rgb = overlay colour at the top of the gradient
+    float4 highlight_bottom; // rgb = overlay colour at the bottom
+    float4 params;           // x = highlight threshold, y = gradient top Y, z = gradient bottom Y
+};
+[[vk::binding(4, 0)]] ConstantBuffer<WaterLook> water_look;
 
 struct FragmentInput {
     [[vk::location(0)]] float2 uv       : TEXCOORD0;
@@ -50,7 +60,19 @@ float4 fs_main(FragmentInput input) : SV_Target {
     float frac_part = saturate(t - float(index));
     float surface_y = lerp(surface_heights[index], surface_heights[index + 1u], frac_part);
 
-    // Distance below the surface, 0 at the surface and 1 at max_depth
+    // Distance below the surface, normalised by max_depth. Inverted so that larger (whiter)
+    // values are higher up: 1 at the surface, 0 at max_depth.
     float depth = saturate((surface_y - input.world_y) / max(surface_params.max_depth, 0.00001));
-    return float4(depth, depth, depth, 1.0);
+    float height = 1.0 - depth;
+
+    // World-space vertical gradient
+    float gradient_span = max(water_look.params.y - water_look.params.z, 0.00001);
+    float gradient_t = saturate((input.world_y - water_look.params.z) / gradient_span);
+    float3 base = lerp(water_look.bottom_color.rgb, water_look.top_color.rgb, gradient_t);
+
+    // Light overlay gradient in the areas above the threshold (near the surface)
+    float3 overlay_gradient = lerp(water_look.highlight_bottom.rgb, water_look.highlight_top.rgb, gradient_t);
+    float overlay = smoothstep(water_look.params.x, 1.0, height);
+
+    return float4(lerp(base, overlay_gradient, overlay), 1.0);
 }
