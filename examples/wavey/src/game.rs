@@ -1,6 +1,6 @@
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
 use crate::uv_pass::UvQuadPass;
-use pill_engine::{define_component, define_global_component, game::*};
+use pill_engine::{define_global_component, game::*};
 
 use std::sync::{Arc, Mutex};
 
