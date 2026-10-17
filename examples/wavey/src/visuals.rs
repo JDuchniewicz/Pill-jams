@@ -93,7 +93,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .build_entity(active_scene)
         .with_component(
             TransformComponent::builder()
-                .position(Vector3f::new(0.0, 0.0, -3.0))
+                .position(Vector3f::new(0.0, 0.0, -30.0))
                 .rotation(Vector3f::new(0.0, 180.0, 0.0))
                 .build(),
         )
@@ -111,6 +111,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(
             TransformComponent::builder()
                 .position(Vector3f::new(-1.0, 0.0, 0.0))
+                .scale(Vector3f::new(20.0, 20.0, 20.0))
                 .build(),
         )
         .with_component(
@@ -119,7 +120,9 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .mesh(&chimpanzini_bananini_mesh_handle)
                 .build(),
         )
-        .with_component(PlayerComponent{id: PlayerId::Player1})
+        .with_component(PlayerComponent {
+            id: PlayerId::Player1,
+        })
         .build();
 
     engine
@@ -135,11 +138,13 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .mesh(&chimpanzini_bananini_mesh_handle)
                 .build(),
         )
-        .with_component(PlayerComponent{id:PlayerId::Player2})
+        .with_component(PlayerComponent {
+            id: PlayerId::Player2,
+        })
         .build();
 
     // Procedural polygon driven by the PointsComponent
-    setup_points_polygon(engine, active_scene)?;
+    //setup_points_polygon(engine, active_scene)?;
 
     Ok(())
 }
