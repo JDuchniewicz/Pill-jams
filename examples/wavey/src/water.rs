@@ -5,7 +5,7 @@ pub struct WaterPoint {
     pub y: f32,
     pub velocity: f32,
     pub horizontal_velocity_delta: f32,
-    pub vertical_velocity_delta : f32
+    pub vertical_velocity_delta: f32,
 }
 
 pub struct Bomb {
@@ -116,7 +116,7 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
             // Velocity Verlet, half step 2: finish the velocity update (with damping)
             points[i].velocity = (points[i].velocity + 0.5 * acceleration * step_dt) * damping;
             points[i].y = center;
-            points[i].vertical_velocity_delta = acceleration*step_dt;
+            points[i].vertical_velocity_delta = acceleration * step_dt;
         }
 
         // Reflective boundaries: ends are fixed
@@ -157,8 +157,9 @@ fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()>
             let velocity = strength * influence;
             //point.velocity = (point.velocity + velocity).clamp(-MAX_VELOCITY, MAX_VELOCITY);
             let vertical_velocity_delta = velocity;
-            point.vertical_velocity_delta = ((vertical_velocity_delta).abs()-(point.velocity.abs())).abs();
-            point.velocity = point.velocity + velocity;
+            point.vertical_velocity_delta =
+                ((vertical_velocity_delta).abs() - (point.velocity.abs())).abs();
+            point.velocity += velocity;
         }
     }
 
@@ -230,15 +231,14 @@ fn swell_system(engine: &mut Engine) -> Result<()> {
     if should_swell {
         // A swell rolls in from a random end of the water.
         let direction1 = rand::random_range(-0.9..0.9);
-        let direction2 = rand::random_range(-0.1..0.1) + direction1; 
+        let direction2 = rand::random_range(-0.1..0.1) + direction1;
         swell(engine, direction1, direction2)?;
-
     }
 
     Ok(())
 }
 
-fn swell(engine: &mut Engine, direction: f32, direction2 : f32) -> Result<()> {
+fn swell(engine: &mut Engine, direction: f32, direction2: f32) -> Result<()> {
     let strength = rand::random_range(50.0..150.0);
     let strength2: f32 = rand::random_range(50.0..150.0);
 
