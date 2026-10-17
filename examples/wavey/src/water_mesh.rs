@@ -1,5 +1,6 @@
 use pill_engine::{define_component, game::*};
 
+use crate::game::GameUIStateComponent;
 use crate::water::{GameState, WATER_X_MAX, WATER_X_MIN};
 
 const VERTEX_SHADER: &str = include_str!("../res/shaders/water_mesh_vertex.wgsl");
@@ -18,18 +19,30 @@ const MAX_DEPTH: f32 = 100.0;
 const BIND_GROUP_FRAME: usize = 0;
 
 // Entities with this component are drawn by `WaterMeshPass` using `water_mesh_shader`.
-define_component!(WaterMeshComponent {
-    mesh: MeshHandle,
-});
+define_component!(WaterMeshComponent { mesh: MeshHandle });
 
 /// Mirrors `PerDraw` in water_mesh_vertex.hlsl: position, rotation (radians), scale
 type PerDraw = [[f32; 4]; 3];
+
+/// Second UV stream (`TEXCOORD1`) → shader location 8.
+fn uv2_layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+    wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 8,
+            format: wgpu::VertexFormat::Float32x2,
+        }],
+    }
+}
 
 struct WaterMeshPassState {
     pipeline: Pipeline,
     camera_buffer: wgpu::Buffer,
     per_draw_buffer: wgpu::Buffer,
-    /// `SurfaceParams`: count, x_min, x_max, max_depth (bit-packed u32 words).
+    /// `SurfaceParams`: count, x_min, x_max, max_depth (bit-packed u32 words), then the
+    /// second-UV debug flag and padding.
     surface_params_buffer: wgpu::Buffer,
     /// Water surface heights (world Y), uniformly spaced between x_min and x_max.
     surface_heights_buffer: wgpu::Buffer,
@@ -123,7 +136,7 @@ impl Pass for WaterMeshPass {
                 source: FRAGMENT_SHADER,
                 entry_func: "fs_main",
             },
-            vertex_buffers: &[RendererMesh::data_layout_descriptor()],
+            vertex_buffers: &[RendererMesh::data_layout_descriptor(), uv2_layout()],
             bind_groups,
             targets: &[Some(wgpu::ColorTargetState {
                 format: HDR_TARGET_FORMAT,
@@ -157,7 +170,7 @@ impl Pass for WaterMeshPass {
         })?;
         let surface_params_buffer = renderer.create_buffer(BufferDesc {
             label: Some("water_mesh_pass_surface_params"),
-            byte_size: 16, // four u32 words
+            byte_size: std::mem::size_of::<[u32; 8]>() as u64, // matches SurfaceParams
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })?;
         let surface_heights_buffer = renderer.create_buffer(BufferDesc {
@@ -165,30 +178,31 @@ impl Pass for WaterMeshPass {
             byte_size: (std::mem::size_of::<f32>() * MAX_SURFACE_SAMPLES) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         })?;
-        let frame_bind_group = renderer
-            .get_device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("water_mesh_pass_frame_bind_group"),
-                layout: &pipeline.bind_group_layouts[BIND_GROUP_FRAME],
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: camera_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: per_draw_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: surface_params_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: surface_heights_buffer.as_entire_binding(),
-                    },
-                ],
-            });
+        let frame_bind_group =
+            renderer
+                .get_device()
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("water_mesh_pass_frame_bind_group"),
+                    layout: &pipeline.bind_group_layouts[BIND_GROUP_FRAME],
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: camera_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: per_draw_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: surface_params_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: surface_heights_buffer.as_entire_binding(),
+                        },
+                    ],
+                });
 
         self.state = Some(WaterMeshPassState {
             pipeline,
@@ -273,16 +287,31 @@ impl Pass for WaterMeshPass {
         if heights.len() < 2 {
             heights = vec![0.0, 0.0];
         }
+        // The egui overlay owns the flag; read it once per frame for the fragment shader.
+        let show_uv2 = world
+            .get_global::<GameUIStateComponent>()
+            .map(|state| {
+                *state
+                    .show_uv2
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+            })
+            .unwrap_or(false);
         queue.write_buffer(
             &state.surface_heights_buffer,
             0,
             bytemuck::cast_slice(&heights),
         );
-        let surface_params: [u32; 4] = [
+        let surface_params: [u32; 8] = [
             heights.len() as u32,
             x_min.to_bits(),
             x_max.to_bits(),
             MAX_DEPTH.to_bits(),
+            // Non-zero selects the second-UV debug view in the fragment shader
+            u32::from(show_uv2),
+            0,
+            0,
+            0,
         ];
         queue.write_buffer(
             &state.surface_params_buffer,
@@ -324,7 +353,12 @@ impl Pass for WaterMeshPass {
 
         for (instance, mesh_handle) in self.draw_list.iter().enumerate() {
             let mesh = world.renderer_mesh(mesh_handle)?;
+            // The shader requires the second UV stream
+            let Some(uv2_buffer) = &mesh.uv2_buffer else {
+                continue;
+            };
             render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, uv2_buffer.slice(..));
             render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             let instance = instance as u32;
             render_pass.draw_indexed(0..mesh.index_count, 0, instance..instance + 1);

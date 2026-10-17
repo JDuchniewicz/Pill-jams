@@ -83,8 +83,11 @@ impl SpriteRenderingComponentBuilder {
 /// Draws a textured quad (a sprite) with the built-in `PassSprites`.
 ///
 /// The quad is centered on the entity's `TransformComponent::position`, faces the camera and is
-/// `size * transform.scale` world units wide/tall. Sprites are drawn after the opaque scene,
-/// sorted by `order`, with alpha blending; `depth_test = false` keeps them on top of everything.
+/// `size * transform.scale` world units wide/tall. `TransformComponent::rotation` rotates the
+/// quad: the rotated local X/Y axes are projected onto the camera plane, so a Z rotation rolls
+/// the sprite on screen (and, with a top-down camera, a Y rotation spins it).
+/// Sprites are drawn after the opaque scene, sorted by `order`, with alpha blending;
+/// `depth_test = false` keeps them on top of everything.
 #[readonly::make]
 pub struct SpriteRenderingComponent {
     #[readonly]

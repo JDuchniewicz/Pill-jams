@@ -9,7 +9,7 @@ use crate::graphics::{
 };
 use crate::resources::TextureHandle;
 
-use pill_core::Result;
+use pill_core::{Result, Vector3f};
 
 /// Mirrors `Camera` in sprite_vertex.hlsl: view-projection plus the camera's world-space basis,
 /// so the CPU never has to build a per-sprite matrix.
@@ -21,21 +21,25 @@ struct SpriteCameraUniform {
     camera_up: [f32; 4],
 }
 
-/// One sprite instance: quad center, half extent, tint, UV flips, depth-test flag and the
-/// waterline (world Y + brightness factor below it).
+/// One sprite instance: quad center, camera-plane quad axes, tint, UV flips, depth-test flag
+/// and the waterline (world Y + brightness factor below it).
+///
+/// The axes already have the sprite size, the transform scale and the transform rotation baked
+/// in (projected onto the camera plane), so the vertex shader only has to offset each corner.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct SpriteInstance {
-    center: [f32; 3],    // offset 0
-    half_size: [f32; 2], // offset 12
-    color: [f32; 4],     // offset 20
-    uv_flip: [f32; 2],   // offset 36
-    depth_test: f32,     // offset 44
-    submerge: [f32; 2],  // offset 48: x = waterline world Y, y = factor below it
+    center: [f32; 3],   // offset 0
+    axis_x: [f32; 2],   // offset 12: camera-plane X axis, in world units
+    axis_y: [f32; 2],   // offset 20: camera-plane Y axis, in world units
+    color: [f32; 4],    // offset 28
+    uv_flip: [f32; 2],  // offset 44
+    depth_test: f32,    // offset 52
+    submerge: [f32; 2], // offset 56: x = waterline world Y, y = factor below it
 }
 
 // The attribute offsets below are hand-written, so pin the layout to them.
-const _: () = assert!(std::mem::size_of::<SpriteInstance>() == 56);
+const _: () = assert!(std::mem::size_of::<SpriteInstance>() == 64);
 
 impl SpriteInstance {
     fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
@@ -57,21 +61,26 @@ impl SpriteInstance {
                 wgpu::VertexAttribute {
                     offset: 20,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x4,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
                 wgpu::VertexAttribute {
-                    offset: 36,
+                    offset: 28,
                     shader_location: 3,
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
                 wgpu::VertexAttribute {
                     offset: 44,
                     shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 52,
+                    shader_location: 5,
                     format: wgpu::VertexFormat::Float32,
                 },
                 wgpu::VertexAttribute {
-                    offset: 48,
-                    shader_location: 5,
+                    offset: 56,
+                    shader_location: 6,
                     format: wgpu::VertexFormat::Float32x2,
                 },
             ],
@@ -79,11 +88,44 @@ impl SpriteInstance {
     }
 }
 
-/// One queued sprite draw: sort key, texture and the instance data uploaded to the GPU.
+/// One queued sprite draw: sort key, texture and the CPU-side data needed to build the GPU
+/// instance once the active camera is known.
 struct SpriteDraw {
     order: i32,
     texture_handle: TextureHandle,
-    instance: SpriteInstance,
+    center: [f32; 3],
+    /// Entity-local X axis (`half_size.x` long) rotated into world space.
+    axis_x_world: Vector3f,
+    /// Entity-local Y axis (`half_size.y` long) rotated into world space.
+    axis_y_world: Vector3f,
+    color: [f32; 4],
+    uv_flip: [f32; 2],
+    depth_test: f32,
+    submerge: [f32; 2],
+}
+
+impl SpriteDraw {
+    /// Builds the GPU instance for this draw.
+    ///
+    /// Sprites are billboards, so the rotated axes are projected onto the camera plane; the
+    /// component along the view direction would only move the quad towards/away from the camera.
+    fn instance(&self, camera_right: Vector3f, camera_up: Vector3f) -> SpriteInstance {
+        SpriteInstance {
+            center: self.center,
+            axis_x: [
+                self.axis_x_world.dot(camera_right),
+                self.axis_x_world.dot(camera_up),
+            ],
+            axis_y: [
+                self.axis_y_world.dot(camera_right),
+                self.axis_y_world.dot(camera_up),
+            ],
+            color: self.color,
+            uv_flip: self.uv_flip,
+            depth_test: self.depth_test,
+            submerge: self.submerge,
+        }
+    }
 }
 
 struct SpritesState {
@@ -301,24 +343,27 @@ impl Pass for PassSprites {
                 break;
             }
 
+            // Rotate the sprite-local X/Y axes by the entity transform, with the size and scale
+            // folded into their lengths. The camera projection happens in `SpriteDraw::instance`.
+            let rotation = transform.rotation_matrix();
+
             self.sprites.push(SpriteDraw {
                 order: sprite.order,
                 texture_handle,
-                instance: SpriteInstance {
-                    center: [
-                        transform.position.x,
-                        transform.position.y,
-                        transform.position.z,
-                    ],
-                    half_size,
-                    color: sprite.color,
-                    uv_flip: [
-                        if sprite.flip_x { 1.0 } else { 0.0 },
-                        if sprite.flip_y { 1.0 } else { 0.0 },
-                    ],
-                    depth_test: if sprite.depth_test { 1.0 } else { 0.0 },
-                    submerge: [sprite.submerge_height, sprite.submerge_factor],
-                },
+                center: [
+                    transform.position.x,
+                    transform.position.y,
+                    transform.position.z,
+                ],
+                axis_x_world: rotation * Vector3f::new(half_size[0], 0.0, 0.0),
+                axis_y_world: rotation * Vector3f::new(0.0, half_size[1], 0.0),
+                color: sprite.color,
+                uv_flip: [
+                    if sprite.flip_x { 1.0 } else { 0.0 },
+                    if sprite.flip_y { 1.0 } else { 0.0 },
+                ],
+                depth_test: if sprite.depth_test { 1.0 } else { 0.0 },
+                submerge: [sprite.submerge_height, sprite.submerge_factor],
             });
         }
         if self.sprites.is_empty() {
@@ -329,13 +374,12 @@ impl Pass for PassSprites {
 
         let (camera_component, camera_transform) = world.active_camera()?;
         let view_projection = camera_view_projection(camera_component, camera_transform);
+        let camera_right = camera_transform.get_right_direction();
+        let camera_up = camera_transform.get_up_direction();
         let camera_uniform = SpriteCameraUniform {
             view_projection: view_projection.to_cols_array_2d(),
-            camera_right: camera_transform
-                .get_right_direction()
-                .extend(0.0)
-                .to_array(),
-            camera_up: camera_transform.get_up_direction().extend(0.0).to_array(),
+            camera_right: camera_right.extend(0.0).to_array(),
+            camera_up: camera_up.extend(0.0).to_array(),
         };
 
         let state = self
@@ -346,10 +390,11 @@ impl Pass for PassSprites {
         let queue = renderer.get_queue();
         queue.write_buffer(&state.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
         for (index, sprite) in self.sprites.iter().enumerate() {
+            let instance = sprite.instance(camera_right, camera_up);
             queue.write_buffer(
                 &state.instance_buffer,
                 (index * std::mem::size_of::<SpriteInstance>()) as u64,
-                bytemuck::bytes_of(&sprite.instance),
+                bytemuck::bytes_of(&instance),
             );
         }
 
@@ -435,7 +480,7 @@ impl Pass for PassSprites {
             else {
                 continue;
             };
-            let submerged = sprite.instance.submerge[1] < 1.0;
+            let submerged = sprite.submerge[1] < 1.0;
             if bound_submerged != Some(submerged) {
                 let pipeline = if submerged {
                     &state.pipeline_submerged.pipeline

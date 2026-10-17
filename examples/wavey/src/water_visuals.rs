@@ -10,8 +10,8 @@ define_global_component!(PointsComponent {
 });
 
 const POINT_Z: f32 = 1.0;
-/// Extra outline points added this far below each end of the water surface.
-const WATER_BOTTOM_OFFSET: f32 = -100.0;
+/// World Y of the flat bottom edge of the water body.
+const WATER_BOTTOM_Y: f32 = -100.0;
 
 /// Maps a normalized water-point X (0..1) to the world-space surface span.
 fn water_world_x(normalized_x: f32) -> f32 {
@@ -21,12 +21,16 @@ fn water_world_x(normalized_x: f32) -> f32 {
 /// Creates the water body mesh and entity, registers the `PointsComponent`, the water mesh pass
 /// (`water_mesh_shader`) and the per-frame update system.
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
-    let outline = {
+    let (top, bottom, uv2) = {
         let game_state = engine.get_global_component::<GameState>()?;
-        water_outline(&game_state.water_points)
+        water_rows(&game_state.water_points)
     };
-    let points_mesh_handle =
-        engine.add_resource(Mesh::from_polygon("points_polygon", &outline)?)?;
+    let points_mesh_handle = engine.add_resource(Mesh::from_quad_strip_with_top_uv2(
+        "points_polygon",
+        &top,
+        &bottom,
+        &uv2,
+    )?)?;
 
     // Custom-shader material: the water body is drawn by WaterMeshPass with `water_mesh_shader`.
     engine.register_component::<WaterMeshComponent>(active_scene)?;
@@ -56,38 +60,33 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     Ok(())
 }
 
-/// Builds the water body outline: the surface points plus a point `WATER_BOTTOM_OFFSET` below
-/// each end. Local X is mirrored because the mesh entity is rotated 180° about Y to face the
-/// camera, which keeps rendered vertices aligned with the stored water points.
-fn water_outline(water_points: &[WaterPoint]) -> Vec<Vector2f> {
-    if water_points.is_empty() {
-        return Vec::new();
+/// Builds the water body as a quad strip: every surface point has a matching bottom point at the
+/// same X, pinned to the flat bottom edge (`WATER_BOTTOM_Y`), and the two are connected by an
+/// edge, so the mesh is made of quads.
+///
+/// Local X is mirrored because the mesh entity is rotated 180° about Y to face the camera, which
+/// keeps rendered vertices aligned with the stored water points. The points are emitted right to
+/// left so that, after the mirroring, local X increases along the strip (CCW winding).
+///
+/// Also builds the second UV set: `[vertical_velocity_delta, 0]` per surface point.
+fn water_rows(water_points: &[WaterPoint]) -> (Vec<Vector2f>, Vec<Vector2f>, Vec<[f32; 2]>) {
+    let mut top = Vec::with_capacity(water_points.len());
+    let mut bottom = Vec::with_capacity(water_points.len());
+    let mut uv2 = Vec::with_capacity(water_points.len());
+
+    for point in water_points.iter().rev() {
+        let x = -water_world_x(point.x);
+        top.push(Vector2f::new(x, point.y));
+        // Flat bottom: every bottom vertex sits on the same horizontal line
+        bottom.push(Vector2f::new(x, WATER_BOTTOM_Y));
+        uv2.push([point.vertical_velocity_delta, 0.0]);
     }
 
-    let first = &water_points[0];
-    let last = &water_points[water_points.len() - 1];
-
-    let mut outline = Vec::with_capacity(water_points.len() + 2);
-    // Bottom-left corner.
-    outline.push(Vector2f::new(
-        -water_world_x(first.x),
-        first.y + WATER_BOTTOM_OFFSET,
-    ));
-    // Water surface, left to right.
-    for point in water_points {
-        outline.push(Vector2f::new(-water_world_x(point.x), point.y));
-    }
-    // Bottom-right corner; the polygon closes back to the bottom-left.
-    outline.push(Vector2f::new(
-        -water_world_x(last.x),
-        last.y + WATER_BOTTOM_OFFSET,
-    ));
-
-    outline
+    (top, bottom, uv2)
 }
 
 fn points_system(engine: &mut Engine) -> Result<()> {
-    let (mesh_handle, outline, dots) = {
+    let (mesh_handle, top, bottom, uv2, dots) = {
         let component = engine.get_global_component::<PointsComponent>()?;
         let game_state = engine.get_global_component::<GameState>()?;
         let dots = game_state
@@ -95,19 +94,16 @@ fn points_system(engine: &mut Engine) -> Result<()> {
             .iter()
             .map(|point| Vector3f::new(water_world_x(point.x), point.y, POINT_Z))
             .collect::<Vec<_>>();
-        (
-            component.mesh_handle,
-            water_outline(&game_state.water_points),
-            dots,
-        )
+        let (top, bottom, uv2) = water_rows(&game_state.water_points);
+        (component.mesh_handle, top, bottom, uv2, dots)
     };
 
     // Deform the filled water body to the current surface positions.
     // A malformed frame must not take the whole game down: skip the mesh update instead.
-    match MeshData::from_polygon(&outline) {
+    match MeshData::from_quad_strip_with_top_uv2(&top, &bottom, &uv2) {
         Ok(mesh_data) => engine.update_mesh(&mesh_handle, mesh_data)?,
         Err(error) => {
-            eprintln!("points_system: skipping invalid water polygon: {error}");
+            eprintln!("points_system: skipping invalid water mesh: {error}");
             return Ok(());
         }
     }

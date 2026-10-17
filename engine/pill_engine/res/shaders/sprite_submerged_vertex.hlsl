@@ -11,11 +11,12 @@ struct Camera {
 
 struct VertexInput {
     [[vk::location(0)]] float3 center;     // per-instance, world space
-    [[vk::location(1)]] float2 half_size;  // per-instance, world units
-    [[vk::location(2)]] float4 color;      // per-instance, linear RGBA tint
-    [[vk::location(3)]] float2 uv_flip;    // per-instance, 1 = mirrored on that UV axis
-    [[vk::location(4)]] float  depth_test; // per-instance, 0 = always drawn on top
-    [[vk::location(5)]] float2 submerge;   // per-instance: x = waterline world Y, y = factor below
+    [[vk::location(1)]] float2 axis_x;     // per-instance, world units (size + scale + rotation)
+    [[vk::location(2)]] float2 axis_y;     // per-instance, world units (size + scale + rotation)
+    [[vk::location(3)]] float4 color;      // per-instance, linear RGBA tint
+    [[vk::location(4)]] float2 uv_flip;    // per-instance, 1 = mirrored on that UV axis
+    [[vk::location(5)]] float  depth_test; // per-instance, 0 = always drawn on top
+    [[vk::location(6)]] float2 submerge;   // per-instance: x = waterline world Y, y = factor below
 };
 
 struct VertexOutput {
@@ -39,7 +40,9 @@ VertexOutput vs_main(VertexInput input, uint vertex_id : SV_VertexID) {
 
     float2 corner = corners[vertex_id];
     // The quad always lies in the camera plane, so sprites stay screen-aligned for any camera.
-    float2 offset = (corner * 2.0 - 1.0) * input.half_size;
+    // The axes already include the transform rotation, projected onto that plane.
+    float2 centered = corner * 2.0 - 1.0;
+    float2 offset = centered.x * input.axis_x + centered.y * input.axis_y;
     float3 world_position =
         input.center + camera.camera_right.xyz * offset.x + camera.camera_up.xyz * offset.y;
     float4 clip_position = mul(camera.view_projection, float4(world_position, 1.0));

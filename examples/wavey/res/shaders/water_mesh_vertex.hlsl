@@ -16,12 +16,15 @@ struct PerDraw {
 struct VertexInput {
     [[vk::location(0)]] float3 position;
     [[vk::location(4)]] float2 uv;
+    // Second UV set (TEXCOORD1): per-vertex water velocity data
+    [[vk::location(8)]] float2 velocity;
 };
 
 struct VertexOutput {
     [[vk::location(0)]] float2 uv        : TEXCOORD0;
     [[vk::location(1)]] float  world_x   : TEXCOORD1;
     [[vk::location(2)]] float  world_y   : TEXCOORD2;
+    [[vk::location(3)]] float2 velocity  : TEXCOORD3;
                          float4 sv_position : SV_POSITION;
 };
 
@@ -41,5 +44,6 @@ VertexOutput vs_main(VertexInput input, uint instance_id : SV_InstanceID) {
     output.uv = input.uv;
     output.world_x = world_position.x;
     output.world_y = world_position.y;
+    output.velocity = input.velocity;
     return output;
 }

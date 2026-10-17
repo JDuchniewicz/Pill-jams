@@ -10,6 +10,9 @@ define_global_component!(GameUIStateComponent {
     ortho_size: Arc<Mutex<f32>>,
     draw_sprite_bounds: Arc<Mutex<bool>>,
     draw_background: Arc<Mutex<bool>>,
+    // Draw the water mesh with its second UV set (velocity) visualised instead of the normal
+    // shading. Read by `WaterMeshPass`.
+    show_uv2: Arc<Mutex<bool>>,
     sky: Arc<Mutex<SkyParams>>,
 });
 
@@ -50,11 +53,13 @@ impl PillGame for Game {
         let ortho_size = Arc::new(Mutex::new(200.0_f32));
         let draw_sprite_bounds = Arc::new(Mutex::new(false));
         let draw_background = Arc::new(Mutex::new(true));
+        let show_uv2 = Arc::new(Mutex::new(false));
         let sky = Arc::new(Mutex::new(SkyParams::default()));
         engine.add_global_component(GameUIStateComponent {
             ortho_size: Arc::clone(&ortho_size),
             draw_sprite_bounds: Arc::clone(&draw_sprite_bounds),
             draw_background: Arc::clone(&draw_background),
+            show_uv2: Arc::clone(&show_uv2),
             sky: Arc::clone(&sky),
         })?;
         engine.set_game_overlay(move |ctx| {
@@ -67,6 +72,9 @@ impl PillGame for Game {
             let mut draw_background = draw_background
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut show_uv2 = show_uv2
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut sky = sky.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             egui::Window::new("Wavey")
                 .resizable(true)
@@ -76,6 +84,7 @@ impl PillGame for Game {
                     ui.label(format!("Ortho size: {:.1}", ortho_size));
                     ui.checkbox(&mut draw_sprite_bounds, "Sprite bounds");
                     ui.checkbox(&mut draw_background, "Sky & water background");
+                    ui.checkbox(&mut show_uv2, "Water mesh: UV2 (velocity)");
 
                     ui.separator();
                     egui::CollapsingHeader::new("Sky & water")

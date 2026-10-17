@@ -86,6 +86,40 @@ impl Mesh {
         Ok(Self::from_data(name, MeshData::from_polygon(points)?))
     }
 
+    /// [`Mesh::from_polygon`] plus a second UV set (`TEXCOORD1`), one value per input point.
+    /// The values follow the outline through the same normalization as the positions.
+    pub fn from_polygon_with_uv2(
+        name: &str,
+        points: &[Vector2f],
+        uv2: &[[f32; 2]],
+    ) -> Result<Self> {
+        Ok(Self::from_data(
+            name,
+            MeshData::from_polygon_with_uv2(points, uv2)?,
+        ))
+    }
+
+    /// Quad strip between two rows of matching points (see [`MeshData::from_quad_strip`]).
+    pub fn from_quad_strip(name: &str, top: &[Vector2f], bottom: &[Vector2f]) -> Result<Self> {
+        Ok(Self::from_data(
+            name,
+            MeshData::from_quad_strip(top, bottom)?,
+        ))
+    }
+
+    /// Quad strip with a second UV set for the top row (bottom row vertices get `[0, 0]`).
+    pub fn from_quad_strip_with_top_uv2(
+        name: &str,
+        top: &[Vector2f],
+        bottom: &[Vector2f],
+        uv2_top: &[[f32; 2]],
+    ) -> Result<Self> {
+        Ok(Self::from_data(
+            name,
+            MeshData::from_quad_strip_with_top_uv2(top, bottom, uv2_top)?,
+        ))
+    }
+
     /// Build a mesh from pre-converted `.cooked_mesh` bytes (e.g. `include_bytes!(...)`).
     /// Works on all targets including wasm. Produces smaller binaries than
     /// `from_obj_bytes` — run `pill_launcher -a assets` to generate `.cooked_mesh` files.
@@ -141,7 +175,11 @@ fn load_cooked_mesh(bytes: &[u8]) -> Result<MeshData> {
         .iter()
         .map(|&bytes| u32::from_le_bytes(bytes))
         .collect();
-    Ok(MeshData { vertices, indices })
+    Ok(MeshData {
+        vertices,
+        indices,
+        texture_coordinates_2: Vec::new(),
+    })
 }
 
 impl Resource for Mesh {
@@ -254,6 +292,9 @@ pub struct MeshVertex {
 pub struct MeshData {
     pub vertices: Vec<MeshVertex>,
     pub indices: Vec<u32>,
+    /// Optional second UV set (`TEXCOORD1`), one entry per vertex. Empty when unused.
+    /// Kept as a separate stream so the primary vertex layout stays unchanged.
+    pub texture_coordinates_2: Vec<[f32; 2]>,
 }
 
 impl MeshData {
@@ -377,6 +418,7 @@ impl MeshData {
         let mesh_data = MeshData {
             vertices,
             indices: mesh.indices.clone(),
+            texture_coordinates_2: Vec::new(),
         };
 
         Ok(mesh_data)
@@ -575,7 +617,122 @@ impl MeshData {
             20, 21, 22, 20, 22, 23, // left
         ];
 
-        MeshData { vertices, indices }
+        MeshData {
+            vertices,
+            indices,
+            texture_coordinates_2: Vec::new(),
+        }
+    }
+
+    /// Triangulates a closed 2D polyline like [`MeshData::from_polygon`], and also writes a
+    /// second UV set (`uv2`, one entry per input point) into `texture_coordinates_2`.
+    ///
+    /// The values follow the outline through the same normalization the positions do (duplicate
+    /// removal and winding), so `uv2[i]` always belongs to `points[i]`.
+    pub fn from_polygon_with_uv2(points: &[Vector2f], uv2: &[[f32; 2]]) -> Result<Self> {
+        if points.len() != uv2.len() {
+            return Err(format!(
+                "polygon uv2 length {} does not match point count {}",
+                uv2.len(),
+                points.len()
+            )
+            .into());
+        }
+
+        let mut mesh = Self::from_polygon(points)?;
+        let mut per_vertex = Vec::with_capacity(mesh.vertices.len());
+        for vertex in &mesh.vertices {
+            let position = Vector2f::new(vertex.position[0], vertex.position[1]);
+            let index = points
+                .iter()
+                .position(|point| point.distance_squared(position) <= 1e-12)
+                .ok_or("polygon vertex does not match any input point")?;
+            per_vertex.push(uv2[index]);
+        }
+        mesh.texture_coordinates_2 = per_vertex;
+        Ok(mesh)
+    }
+
+    /// Builds a quad strip between two polylines with the same number of points: `top[i]` and
+    /// `bottom[i]` are connected by an edge, and each quad is split into two triangles.
+    ///
+    /// Geometry lies at `z = 0` with +Z normals and counter-clockwise winding. UVs run 0..1
+    /// across the strip (u) and 0 on the top edge to 1 on the bottom edge (v).
+    pub fn from_quad_strip(top: &[Vector2f], bottom: &[Vector2f]) -> Result<Self> {
+        Self::from_quad_strip_with_top_uv2(top, bottom, &[])
+    }
+
+    /// [`MeshData::from_quad_strip`] plus a second UV set for the top row; bottom-row vertices
+    /// get `[0.0, 0.0]`.
+    pub fn from_quad_strip_with_top_uv2(
+        top: &[Vector2f],
+        bottom: &[Vector2f],
+        uv2_top: &[[f32; 2]],
+    ) -> Result<Self> {
+        if top.len() != bottom.len() {
+            return Err(format!(
+                "quad strip rows differ in length: {} top vs {} bottom",
+                top.len(),
+                bottom.len()
+            )
+            .into());
+        }
+        if top.len() < 2 {
+            return Err("quad strip requires at least 2 points per row".into());
+        }
+        if !uv2_top.is_empty() && uv2_top.len() != top.len() {
+            return Err(format!(
+                "quad strip uv2 length {} does not match {} points",
+                uv2_top.len(),
+                top.len()
+            )
+            .into());
+        }
+
+        let count = top.len();
+        let inv_u = 1.0 / (count - 1) as f32;
+        let mut vertices = Vec::with_capacity(count * 2);
+        let mut texture_coordinates_2 = if uv2_top.is_empty() {
+            Vec::new()
+        } else {
+            Vec::with_capacity(count * 2)
+        };
+
+        for (point, row) in [(top, 0.0f32), (bottom, 1.0f32)] {
+            for (i, position) in point.iter().enumerate() {
+                if !position.is_finite() {
+                    return Err("quad strip contains a non-finite coordinate".into());
+                }
+                vertices.push(MeshVertex {
+                    position: [position.x, position.y, 0.0],
+                    texture_coordinates: [i as f32 * inv_u, row],
+                    normal: [0.0, 0.0, 1.0],
+                    tangent: [1.0, 0.0, 0.0],
+                    bitangent: [0.0, 1.0, 0.0],
+                });
+                if !uv2_top.is_empty() {
+                    // Top row keeps its value, bottom row has no velocity
+                    texture_coordinates_2.push(if row == 0.0 { uv2_top[i] } else { [0.0, 0.0] });
+                }
+            }
+        }
+
+        // Two triangles per quad, counter-clockwise when the top row runs left to right
+        let mut indices = Vec::with_capacity((count - 1) * 6);
+        for i in 0..count - 1 {
+            let top_0 = i as u32;
+            let top_1 = (i + 1) as u32;
+            let bottom_0 = (count + i) as u32;
+            let bottom_1 = (count + i + 1) as u32;
+            indices.extend_from_slice(&[bottom_0, bottom_1, top_0]);
+            indices.extend_from_slice(&[top_0, bottom_1, top_1]);
+        }
+
+        Ok(Self {
+            vertices,
+            indices,
+            texture_coordinates_2,
+        })
     }
 
     /// Triangulates a closed 2D polyline into a flat mesh in the XY plane (ear clipping).
@@ -622,7 +779,11 @@ impl MeshData {
             })
             .collect();
 
-        Ok(Self { vertices, indices })
+        Ok(Self {
+            vertices,
+            indices,
+            texture_coordinates_2: Vec::new(),
+        })
     }
 }
 
@@ -699,9 +860,7 @@ fn cross_2d(a: Vector2f, b: Vector2f, c: Vector2f) -> f32 {
 
 /// Strictly-inside test for a counter-clockwise triangle.
 fn point_in_triangle(p: Vector2f, a: Vector2f, b: Vector2f, c: Vector2f, epsilon: f32) -> bool {
-    cross_2d(a, b, p) > epsilon
-        && cross_2d(b, c, p) > epsilon
-        && cross_2d(c, a, p) > epsilon
+    cross_2d(a, b, p) > epsilon && cross_2d(b, c, p) > epsilon && cross_2d(c, a, p) > epsilon
 }
 
 /// Ear-clipping triangulation of a simple, counter-clockwise polygon.

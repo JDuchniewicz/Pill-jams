@@ -16,6 +16,8 @@ pub trait Vertex {
 pub struct RendererMesh {
     pub name: String,
     pub vertex_buffer: wgpu::Buffer,
+    /// Optional second UV set (`TEXCOORD1`), one `[u, v]` per vertex.
+    pub uv2_buffer: Option<wgpu::Buffer>,
     pub index_buffer: wgpu::Buffer,
     pub index_count: u32,
 }
@@ -28,6 +30,27 @@ impl RendererMesh {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        let uv2_buffer = if mesh_data.texture_coordinates_2.is_empty() {
+            None
+        } else {
+            if mesh_data.texture_coordinates_2.len() != mesh_data.vertices.len() {
+                return Err(format!(
+                    "mesh {:?} has {} uv2 values for {} vertices",
+                    name,
+                    mesh_data.texture_coordinates_2.len(),
+                    mesh_data.vertices.len()
+                )
+                .into());
+            }
+            Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("{:?}_uv2_buffer", name)),
+                    contents: bytemuck::cast_slice(&mesh_data.texture_coordinates_2),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }),
+            )
+        };
+
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("{:?}_index_buffer", name)),
             contents: bytemuck::cast_slice(&mesh_data.indices),
@@ -37,6 +60,7 @@ impl RendererMesh {
         Ok(Self {
             name: name.to_string(),
             vertex_buffer,
+            uv2_buffer,
             index_buffer,
             index_count: mesh_data.indices.len() as u32,
         })
