@@ -1,4 +1,4 @@
-// Fullscreen UV quad vertex shader (pill_assets regenerates the .wgsl).
+// Background quad vertex shader (pill_assets regenerates the .wgsl).
 // The quad is generated from SV_VertexID in clip space, so it needs no vertex buffer and
 // always covers the whole window, whatever its size.
 

@@ -1,6 +1,7 @@
 use pill_engine::{define_global_component, game::*};
 
 use crate::water::{GameState, WaterPoint, WATER_X_MAX, WATER_X_MIN};
+use crate::water_mesh::{WaterMeshComponent, WaterMeshPass};
 
 // --- Water-surface driven procedural mesh ---
 
@@ -17,8 +18,8 @@ fn water_world_x(normalized_x: f32) -> f32 {
     WATER_X_MIN + normalized_x * (WATER_X_MAX - WATER_X_MIN)
 }
 
-/// Creates the water body mesh, material and entity, registers the `PointsComponent` and adds
-/// the per-frame update system.
+/// Creates the water body mesh and entity, registers the `PointsComponent`, the water mesh pass
+/// (`water_mesh_shader`) and the per-frame update system.
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     let outline = {
         let game_state = engine.get_global_component::<GameState>()?;
@@ -26,11 +27,10 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     };
     let points_mesh_handle =
         engine.add_resource(Mesh::from_polygon("points_polygon", &outline)?)?;
-    let points_material_handle = engine.add_resource::<Material>(
-        Material::new("points_polygon_unlit")
-            .albedo(Color::new(0.0, 0.0, 0.0))
-            .emissive(Color::new(0.2, 0.6, 1.0)),
-    )?;
+
+    // Custom-shader material: the water body is drawn by WaterMeshPass with `water_mesh_shader`.
+    engine.register_component::<WaterMeshComponent>(active_scene)?;
+    engine.add_render_pass(Box::new(WaterMeshPass::new()))?;
 
     engine.add_global_component(PointsComponent {
         mesh_handle: points_mesh_handle,
@@ -48,12 +48,9 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .rotation(Vector3f::new(0.0, 180.0, 0.0))
                 .build(),
         )
-        .with_component(
-            MeshRenderingComponent::builder()
-                .material(&points_material_handle)
-                .mesh(&points_mesh_handle)
-                .build(),
-        )
+        .with_component(WaterMeshComponent {
+            mesh: points_mesh_handle,
+        })
         .build();
 
     Ok(())
