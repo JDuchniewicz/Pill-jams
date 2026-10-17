@@ -3,12 +3,12 @@ use pill_engine::{define_component, game::*};
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 const BUOYANCY_STRENGTH: f32 = 100.0;
-const SHIP_MASS: f32 = 1.0;
+const SHIP_MASS: f32 = 10.0;
 define_component!(PlayerComponent { id: PlayerId });
 
 // TODO: for now we are playing locally -> maybe also play over network
 const NUM_PLAYERS: u8 = 2;
-const THRUST_FORCE: f32 = 25.0;
+const THRUST_FORCE: f32 = 500.0;
 const DZ: f32 = 0.1;
 
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
@@ -58,7 +58,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .shape(SharedShape::cuboid(0.5, 0.8, 0.5))
                 .friction(0.4)
                 .restitution(0.0)
-                .mass(1.0)
+                .mass(SHIP_MASS)
                 .build(),
         )
         .with_component(PlayerComponent {
@@ -68,7 +68,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
 
     // TODO: re-enable wwhen buyonacy
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
-   // physics.set_gravity(Vector3f::new(0.0, 0.0, 0.0));
+    // physics.set_gravity(Vector3f::new(0.0, 0.0, 0.0));
 
     Ok(())
 }
@@ -171,7 +171,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             body.add_force(buoyancy_force, true);
         }
         //constant downward force due to ship weight
-        body.add_force(Vector3f::new(0.0, -SHIP_MASS * BUOYANCY_STRENGTH, 0.0), true);
+        body.add_force(
+            Vector3f::new(0.0, -SHIP_MASS * BUOYANCY_STRENGTH, 0.0),
+            true,
+        );
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
