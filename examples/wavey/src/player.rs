@@ -151,7 +151,6 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
         ship_forces.push((handle, input_x, buoyancy_force));
     }
-
     // Apply thrust and buoyancy to Rapier's bodies
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
@@ -171,6 +170,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         if buoyancy_force.y != 0.0 {
             body.add_force(buoyancy_force, true);
         }
+        //constant downward force due to ship weight
+        body.add_force(Vector3f::new(0.0, -SHIP_MASS * BUOYANCY_STRENGTH, 0.0), true);
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
