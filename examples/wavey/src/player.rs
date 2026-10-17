@@ -8,7 +8,7 @@ define_component!(PlayerComponent { id: PlayerId });
 
 // TODO: for now we are playing locally -> maybe also play over network
 const NUM_PLAYERS: u8 = 2;
-const THRUST_FORCE: f32 = 500.0;
+const THRUST_FORCE: f32 = 750.0;
 const DZ: f32 = 0.1;
 
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
@@ -69,17 +69,19 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         })
         .build();
 
-    // TODO: re-enable wwhen buyonacy
-    let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
-    // physics.set_gravity(Vector3f::new(0.0, 0.0, 0.0));
-
     Ok(())
 }
 
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
+    const HULL_POINTS: [Vector3f; 3] = [
+        Vector3f::new(-0.8, -0.4, 0.0), // Left
+        Vector3f::new(0.0, -0.5, 0.0),  // Center
+        Vector3f::new(0.8, -0.4, 0.0),  // Right
+    ];
+
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
-    let (movements, _wobbles, drop_bombs) = {
+    let (movements, drop_bombs) = {
         let input = engine.get_global_component::<InputComponent>()?;
 
         // movements
@@ -90,14 +92,6 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             (l_stick_x, l_stick_y)
         });
 
-        // wobbles
-        let wobbles: [(f32, f32); NUM_PLAYERS as usize] = std::array::from_fn(|i| {
-            let id = PlayerId::try_from(i as u8).unwrap();
-            let r_stick_y = input.get_gamepad_axis(id, GamepadAxis::RightStickY);
-            let r_stick_x = input.get_gamepad_axis(id, GamepadAxis::RightStickX);
-            (r_stick_x, r_stick_y)
-        });
-
         // actions: drop a bomb
         let drop_bombs: [bool; NUM_PLAYERS as usize] = std::array::from_fn(|i| {
             let id = PlayerId::try_from(i as u8).unwrap();
@@ -105,7 +99,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 || input.get_key_pressed(KeyboardKey::Space)
         });
 
-        (movements, wobbles, drop_bombs)
+        (movements, drop_bombs)
     };
 
     // Collect player rigid body handles and input values
@@ -131,38 +125,39 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 continue;
             };
 
-            let translation = body.translation();
-            ship_states.push((
-                handle,
-                input_x,
-                Vector3f::new(translation.x, translation.y, translation.z),
-            ));
+            ship_states.push((handle, input_x, body.translation(), body.rotation()));
         }
     }
 
     // Compute buoyancy from the current water height
     let mut ship_forces = Vec::with_capacity(ship_states.len());
-    for (handle, input_x, player_position) in ship_states {
-        let water_height = water_height_at_x(engine, player_position.x)?;
+    for (handle, input_x, player_position, player_rotation) in ship_states {
+        // calculate the force triplet
+        let mut point_buoyancy_forces = Vec::with_capacity(3);
+        for local_point in HULL_POINTS {
+            let world_point = player_position + player_rotation * local_point;
+            let water_height = water_height_at_x(engine, world_point.x)?;
 
-        let buoyancy_force = if player_position.y < water_height {
-            let depth = water_height - player_position.y;
-            Vector3f::new(0.0, depth * BUOYANCY_STRENGTH, 0.0)
-        } else {
-            Vector3f::new(0.0, 0.0, 0.0)
-        };
-
-        ship_forces.push((handle, input_x, buoyancy_force));
+            let point_buoyancy_force = if world_point.y < water_height {
+                let depth = water_height - world_point.y;
+                Vector3f::new(0.0, depth * BUOYANCY_STRENGTH, 0.0)
+            } else {
+                Vector3f::new(0.0, 0.0, 0.0)
+            };
+            point_buoyancy_forces.push((world_point, point_buoyancy_force));
+        }
+        ship_forces.push((handle, input_x, point_buoyancy_forces));
     }
     // Apply thrust and buoyancy to Rapier's bodies
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-    for (handle, input_x, buoyancy_force) in ship_forces {
+    for (handle, input_x, point_buoyancy_forces) in ship_forces {
         let Some(body) = physics.rigid_body_set.get_mut(handle) else {
             continue;
         };
 
         body.reset_forces(true);
+        body.reset_torques(true);
 
         // Apply thrust along X
         if input_x.abs() > DZ {
@@ -170,8 +165,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
 
         // Buoyancy pushes up while the player is below the water surface
-        if buoyancy_force.y != 0.0 {
-            body.add_force(buoyancy_force, true);
+        for (world_point, buoyancy_force) in point_buoyancy_forces {
+            if buoyancy_force.y != 0.0 {
+                body.add_force_at_point(buoyancy_force, world_point, true);
+            }
         }
         //constant downward force due to ship weight
         body.add_force(
