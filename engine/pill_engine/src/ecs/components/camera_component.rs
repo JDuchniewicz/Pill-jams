@@ -18,6 +18,21 @@ impl CameraAspectRatio {
     }
 }
 
+/// Projection used by a camera.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CameraProjection {
+    /// Perspective projection; `CameraComponent::fov` is the vertical field of view in degrees.
+    Perspective,
+    /// Orthographic projection; `vertical_size` is the visible height in world units.
+    Orthographic { vertical_size: f32 },
+}
+
+impl Default for CameraProjection {
+    fn default() -> Self {
+        Self::Perspective
+    }
+}
+
 // --- Builder ---
 
 pub struct CameraComponentBuilder {
@@ -41,6 +56,25 @@ impl CameraComponentBuilder {
         self
     }
 
+    /// Sets the projection explicitly (see [`CameraProjection`]).
+    pub fn projection(mut self, projection: CameraProjection) -> Self {
+        self.component.projection = projection;
+        self
+    }
+
+    /// Convenience for `projection(CameraProjection::Perspective)`.
+    pub fn perspective(mut self) -> Self {
+        self.component.projection = CameraProjection::Perspective;
+        self
+    }
+
+    /// Convenience for `projection(CameraProjection::Orthographic { .. })`.
+    /// `vertical_size` is the visible height in world units.
+    pub fn orthographic(mut self, vertical_size: f32) -> Self {
+        self.component.projection = CameraProjection::Orthographic { vertical_size };
+        self
+    }
+
     pub fn range(mut self, range: Range<f32>) -> Self {
         self.component.range = range;
         self
@@ -61,6 +95,7 @@ impl CameraComponentBuilder {
 pub struct CameraComponent {
     pub aspect: CameraAspectRatio,
     pub fov: f32,
+    pub projection: CameraProjection,
     pub range: Range<f32>,
     pub enabled: bool,
 }
@@ -80,6 +115,7 @@ impl CameraComponent {
         Self {
             aspect: CameraAspectRatio::Automatic(1.0),
             fov: 60.0,
+            projection: CameraProjection::Perspective,
             range: 0.1..100.0,
             enabled: false,
         }

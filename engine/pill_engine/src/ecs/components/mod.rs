@@ -24,6 +24,7 @@ pub(crate) mod network_manager_component;
 pub(crate) mod network_state_component;
 #[cfg(feature = "physics")]
 pub(crate) mod physics_world_component;
+pub(crate) mod primitive_draw_component;
 pub(crate) mod render_state_component;
 #[cfg(feature = "physics")]
 pub(crate) mod rigid_body_component;

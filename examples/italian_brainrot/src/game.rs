@@ -142,7 +142,7 @@ impl PillGame for Game {
 
 fn rotation_system(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
-    println!("Delta time: {}", delta_time);
+    //println!("Delta time: {}", delta_time);
 
     for (_, transform_component, _) in
         engine.iterate_two_components_mut::<TransformComponent, TagAlphaComponent>()?

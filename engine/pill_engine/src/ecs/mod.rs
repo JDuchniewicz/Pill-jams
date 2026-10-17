@@ -16,7 +16,9 @@ pub use components::{
     ConcreteComponentDestroyer, GlobalComponent, GlobalComponentStorage,
 };
 
-pub use components::camera_component::{CameraAspectRatio, CameraComponent};
+pub use components::camera_component::{CameraAspectRatio, CameraComponent, CameraProjection};
+
+pub use components::primitive_draw_component::{PrimitiveDrawComponent, PrimitiveStyle};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use components::audio_manager_component::{AudioManagerComponent, SoundType};

@@ -5,6 +5,7 @@ mod dummy_renderer;
 #[cfg(feature = "ui")]
 mod pass_egui;
 mod pass_pbr_opaque;
+mod pass_primitives;
 mod pass_tonemap;
 mod render_queue;
 mod renderer;
@@ -22,6 +23,7 @@ pub use self::dummy_renderer::DummyRenderer;
 #[cfg(feature = "ui")]
 pub use pass_egui::PassEgui;
 pub use pass_pbr_opaque::PassPBROpaque;
+pub use pass_primitives::PassPrimitives;
 pub use pass_tonemap::PassTonemap;
 
 pub use render_queue::{

@@ -6,8 +6,8 @@ use crate::{
     },
     engine::Engine,
     graphics::{
-        Pass, PassPBROpaque, PassTonemap, RendererMaterialHandle, RendererTargetDesc,
-        RendererTextureHandle, TargetSize,
+        Pass, PassPBROpaque, PassPrimitives, PassTonemap, RendererMaterialHandle,
+        RendererTargetDesc, RendererTextureHandle, TargetSize,
     },
     renderer::resources::RendererTexture,
     resources::{MaterialHandle, TextureHandle, TextureType},
@@ -115,6 +115,16 @@ pub const BACKGROUND_FRAGMENT_SHADER: &str =
     include_str!("../res/shaders/background_fragment.wgsl");
 pub const TONEMAP_VERTEX_SHADER: &str = include_str!("../res/shaders/tonemap_vertex.wgsl");
 pub const TONEMAP_FRAGMENT_SHADER: &str = include_str!("../res/shaders/tonemap_fragment.wgsl");
+pub const PRIMITIVE_VERTEX_SHADER: &str = include_str!("../res/shaders/primitive_vertex.wgsl");
+pub const PRIMITIVE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/primitive_fragment.wgsl");
+
+/// Maximum number of line segments queued per frame by `Engine::draw_line`
+/// (2 vertices each in the pass's vertex buffer).
+pub const MAX_PRIMITIVE_LINES: usize = 16_384;
+/// Maximum number of points queued per frame by `Engine::draw_point`.
+pub const MAX_PRIMITIVE_POINTS: usize = 16_384;
+/// Screen-space size of points drawn with `Engine::draw_point`, in pixels.
+pub const PRIMITIVE_POINT_SIZE_PIXELS: f32 = 6.0;
 
 /// Frame composition: opaque PBR → game-defined passes (`Engine::add_render_pass`) → tonemap → UI.
 /// Creates the shared HDR and depth targets and records them in `RenderStateComponent`.
@@ -144,6 +154,8 @@ pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
         initial_ibl,
     ))];
     passes.append(&mut engine.custom_render_passes);
+    // Queued lines/points draw over scene and game-pass content; both are HDR scene passes.
+    passes.push(Box::new(PassPrimitives::new(hdr_target, depth_target)));
     passes.push(Box::new(PassTonemap::new(hdr_target)));
 
     #[cfg(feature = "ui")]

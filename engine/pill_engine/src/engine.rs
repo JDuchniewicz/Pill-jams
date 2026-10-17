@@ -9,7 +9,7 @@ use crate::{
 
 use pill_core::{
     debug, error, get_game_error_message, get_type_name, info, EngineError, LogContext,
-    PillSlotMapKey, PillStyle, PillTypeMap, Timer, Vector2f,
+    PillSlotMapKey, PillStyle, PillTypeMap, Timer, Vector2f, Vector3f,
 };
 
 use pill_core::{ErrorContext, Result};
@@ -260,6 +260,11 @@ impl Engine {
         // Register global components
         self.add_global_component(TimeComponent::new())?;
         self.add_global_component(DeferredUpdateComponent::new())?;
+        // Line/point draw queue used by `Engine::draw_line` / `Engine::draw_point`
+        self.add_global_component(PrimitiveDrawComponent::new(
+            MAX_PRIMITIVE_LINES,
+            MAX_PRIMITIVE_POINTS,
+        ))?;
         #[cfg(feature = "ui")]
         {
             self.add_global_component(EguiComponent::new())?;
@@ -561,6 +566,87 @@ impl Engine {
             self.custom_render_passes.push(pass);
             Ok(())
         }
+    }
+
+    // --- Primitive drawing API ---
+
+    /// Queues a line segment for this frame, drawn by the built-in `PassPrimitives`.
+    ///
+    /// The style controls color and whether the line is depth-tested (`PrimitiveStyle::new`)
+    /// or always visible on top of the scene (`PrimitiveStyle::overlay`).
+    pub fn draw_line(
+        &mut self,
+        from: Vector3f,
+        to: Vector3f,
+        style: impl Into<PrimitiveStyle>,
+    ) -> Result<()> {
+        self.get_global_component::<PrimitiveDrawComponent>()?
+            .push_line(from, to, style.into());
+        Ok(())
+    }
+
+    /// Queues a ray (`origin + direction * length`) for this frame.
+    /// `direction` does not need to be normalized.
+    pub fn draw_ray(
+        &mut self,
+        origin: Vector3f,
+        direction: Vector3f,
+        length: f32,
+        style: impl Into<PrimitiveStyle>,
+    ) -> Result<()> {
+        self.draw_line(origin, origin + direction * length, style)
+    }
+
+    /// Queues a single point for this frame. Points are rendered as one-pixel `PointList`
+    /// primitives (the wgpu/WebGPU limit); use short lines or AABBs when larger markers
+    /// are needed.
+    pub fn draw_point(
+        &mut self,
+        position: Vector3f,
+        style: impl Into<PrimitiveStyle>,
+    ) -> Result<()> {
+        self.get_global_component::<PrimitiveDrawComponent>()?
+            .push_point(position, style.into());
+        Ok(())
+    }
+
+    /// Queues the twelve edges of an axis-aligned box defined by `min` and `max`.
+    pub fn draw_aabb(
+        &mut self,
+        min: Vector3f,
+        max: Vector3f,
+        style: impl Into<PrimitiveStyle>,
+    ) -> Result<()> {
+        let style = style.into();
+        let x0 = Vector3f::new(min.x, min.y, min.z);
+        let x1 = Vector3f::new(max.x, min.y, min.z);
+        let x2 = Vector3f::new(max.x, min.y, max.z);
+        let x3 = Vector3f::new(min.x, min.y, max.z);
+        let y0 = Vector3f::new(min.x, max.y, min.z);
+        let y1 = Vector3f::new(max.x, max.y, min.z);
+        let y2 = Vector3f::new(max.x, max.y, max.z);
+        let y3 = Vector3f::new(min.x, max.y, max.z);
+
+        for (from, to) in [
+            // bottom
+            (x0, x1),
+            (x1, x2),
+            (x2, x3),
+            (x3, x0),
+            // top
+            (y0, y1),
+            (y1, y2),
+            (y2, y3),
+            (y3, y0),
+            // verticals
+            (x0, y0),
+            (x1, y1),
+            (x2, y2),
+            (x3, y3),
+        ] {
+            self.draw_line(from, to, style)?;
+        }
+        Ok(())
     }
 
     /// Creates a single-mip Rgba32Float texture from f32 pixels for `RenderStateComponent`.
@@ -1153,6 +1239,34 @@ impl Engine {
         info!(LogContext::Resources => "Adding {} {} {}", "Resource".general_object_style(), get_type_name::<T>().specific_object_style(), resource.get_name().name_style());
 
         self.add_resource_internal(resource, true)
+    }
+
+    /// Replaces the geometry of an existing mesh resource and re-uploads its GPU buffers.
+    ///
+    /// The `MeshHandle` stays valid, so entities already using this mesh pick up the new geometry
+    /// on the next frame. Intended for procedurally animated meshes; rebuilding GPU buffers every
+    /// frame is wasteful for static geometry.
+    pub fn update_mesh(&mut self, mesh_handle: &MeshHandle, mesh_data: MeshData) -> Result<()> {
+        let mesh_name = self
+            .resource_manager
+            .get_resource::<Mesh>(mesh_handle)?
+            .name
+            .clone();
+
+        #[cfg(not(feature = "headless"))]
+        {
+            let renderer_mesh =
+                RendererMesh::new(self.renderer.get_device(), &mesh_name, &mesh_data)?;
+            *self
+                .resource_manager
+                .get_resource_by_name_mut::<RendererMesh>(&mesh_name)? = renderer_mesh;
+        }
+
+        self.resource_manager
+            .get_resource_mut::<Mesh>(mesh_handle)?
+            .set_mesh_data(mesh_data);
+
+        Ok(())
     }
 
     // Allows to add resource without checking its name to be a valid one (not starting with DEFAULT_RESOURCE_PREFIX)

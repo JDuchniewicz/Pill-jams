@@ -4,8 +4,8 @@ use crate::ecs::EguiClient;
 use crate::{
     app_config::EngineConfig,
     ecs::{
-        CameraComponent, Component, ComponentStorage, EntityHandle, GlobalComponent,
-        GlobalComponentStorage, Scene, TransformComponent,
+        CameraComponent, CameraProjection, Component, ComponentStorage, EntityHandle,
+        GlobalComponent, GlobalComponentStorage, Scene, TransformComponent,
     },
     renderer::resources::{RendererMesh, RendererTexture},
     resources::{Mesh, MeshHandle, ResourceManager, Texture, TextureHandle, TextureType},
@@ -112,18 +112,32 @@ pub fn camera_forward(transform: &TransformComponent) -> Vector3f {
     transform.get_forward_direction()
 }
 
-/// Right-handed perspective view-projection of a camera entity.
+/// Right-handed view-projection of a camera entity.
 pub fn camera_view_projection(
     camera: &CameraComponent,
     transform: &TransformComponent,
 ) -> Matrix4f {
     let view = Matrix4f::look_to_rh(transform.position, camera_forward(transform), Vector3f::Y);
-    let projection = Matrix4f::perspective_rh(
-        camera.fov.to_radians(),
-        camera.aspect.get_value(),
-        camera.range.start,
-        camera.range.end,
-    );
+    let near = camera.range.start;
+    let far = camera.range.end;
+    let aspect = camera.aspect.get_value();
+    let projection = match camera.projection {
+        CameraProjection::Perspective => {
+            Matrix4f::perspective_rh(camera.fov.to_radians(), aspect, near, far)
+        }
+        CameraProjection::Orthographic { vertical_size } => {
+            let half_height = vertical_size * 0.5;
+            let half_width = half_height * aspect;
+            Matrix4f::orthographic_rh(
+                -half_width,
+                half_width,
+                -half_height,
+                half_height,
+                near,
+                far,
+            )
+        }
+    };
     projection * view
 }
 
