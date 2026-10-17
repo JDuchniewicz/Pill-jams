@@ -53,7 +53,6 @@ impl PillGame for Game {
         //engine.add_system("rotation_system", rotation_system)?;
         engine.add_system("evolve_waves", evolve_waves)?;
         engine.add_system("player_movement_system", player_movement_system)?;
-        engine.add_system("playa_system", playa_system)?;
         // --- Visuals setup ---
         crate::visuals::start(engine, active_scene)?;
         // Add render passes
@@ -196,6 +195,17 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     };
 
     // actions
+    //drop a bomb
+    let bomb_pressed: [bool; NUM_PLAYERS as usize] = {
+        std::array::from_fn(|i| { let id = PlayerId::try_from(i as u8).unwrap();
+            let pressed = input.get_gamepad_button_pressed(id, GamepadButton::A)};
+            pressed
+            if pressed {
+                add_bomb(engine).unwrap();
+            }
+        )
+
+    }
 
     // TODO: debug - this just moves one player
     //let (k_w,k_s,k_a,k_d)=(
@@ -284,19 +294,6 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
     for (x, y) in detonated_bombs {
         kick_water(engine, x, y, KICK_STRENGTH)?;
     }
-
-    Ok(())
-}
-fn playa_system(engine: &mut Engine) -> Result<()> {
-    let space_pressed = engine
-        .get_global_component::<InputComponent>()?
-        .get_key_pressed(KeyboardKey::Space);
-
-    if space_pressed {
-        add_bomb(engine)?;
-    }
-
-    update_bombs(engine)?;
 
     Ok(())
 }
