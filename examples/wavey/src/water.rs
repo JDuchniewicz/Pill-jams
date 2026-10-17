@@ -201,8 +201,6 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
 
     Ok(())
 }
-<<<<<<< HEAD
-=======
 fn swell_system(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
 
@@ -242,4 +240,3 @@ fn swell(engine: &mut Engine, direction: f32, direction2 : f32) -> Result<()> {
     kick_water(engine, direction2, 0.0, strength2)?;
     Ok(())
 }
->>>>>>> 73c678a (adding swell)
