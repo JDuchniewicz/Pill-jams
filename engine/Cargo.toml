@@ -8,7 +8,7 @@ members = [
     "pill_native",
     "pill_web",
     "pill_runtime",
-    "/home/jduchniewicz/Projects/StickyPistonStudios/Pill-Engine/examples/wavey", ### Game project crate (This will be changed by Pill Launcher on build to allow proper compilation of game project)
+    "/home/franek/Documents/PillEngine/Pill/examples/italian_brainrot", ### Game project crate (This will be changed by Pill Launcher on build to allow proper compilation of game project)
 ]
 
 # The per-game wasm cdylib (pill_web_app) lives as a template at

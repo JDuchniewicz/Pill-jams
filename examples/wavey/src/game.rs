@@ -12,14 +12,21 @@ pub struct WaterPoint {
     pub y: f32,
     pub velocity: f32,
 }
+pub struct Bomb {
+    pub x: f32,
+    pub y: f32,
+    pub time_to_detonate: f32,
+}
 
 define_component!(PlayerComponent { id: PlayerId });
 
 define_global_component!(GameState{
-   bombs: Vec<i32>,
-   last_bomb: i32,
+   bombs: Vec<Bomb>,
    water_points: Vec<WaterPoint>,
 });
+const INFLUENCE_RADIUS: f32 = 0.1;
+const MAX_VELOCITY: f32 = 5.0;
+const KICK_STRENGTH: f32 = 1.0;
 
 // Orthographic size shared with the egui overlay (updated by `camera_zoom_system`).
 // `Arc<Mutex<_>>` allows the UI callback (which only receives `&egui::Context`) to read it.
@@ -46,9 +53,10 @@ impl PillGame for Game {
         //engine.add_system("rotation_system", rotation_system)?;
         engine.add_system("evolve_waves", evolve_waves)?;
         engine.add_system("player_movement_system", player_movement_system)?;
-
         // --- Visuals setup ---
         crate::visuals::start(engine, active_scene)?;
+        // Add render passes
+        engine.add_render_pass(Box::new(CartoonPass::new()))?;
 
         // --- Camera scale UI ---
 
@@ -87,6 +95,19 @@ impl PillGame for Game {
 
 // --- Systems ---
 
+fn rotation_system(engine: &mut Engine) -> Result<()> {
+    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
+    #[cfg(debug_assertions)]
+    println!("Delta time: {}", delta_time);
+
+    for (_, transform_component, _) in
+        engine.iterate_two_components_mut::<TransformComponent, TagAlphaComponent>()?
+    {
+        transform_component.rotate_around_axis(90.0 * delta_time, Vector3f::new(0.0, 1.0, 0.0));
+    }
+
+    Ok(())
+}
 fn evolve_waves(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
     #[cfg(debug_assertions)]
@@ -174,6 +195,17 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     };
 
     // actions
+    //drop a bomb
+    let bomb_pressed: [bool; NUM_PLAYERS as usize] = {
+        std::array::from_fn(|i| { let id = PlayerId::try_from(i as u8).unwrap();
+            let pressed = input.get_gamepad_button_pressed(id, GamepadButton::A)};
+            pressed
+            if pressed {
+                add_bomb(engine).unwrap();
+            }
+        )
+
+    }
 
     // TODO: debug - this just moves one player
     //let (k_w,k_s,k_a,k_d)=(
@@ -194,6 +226,73 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             transform_component
                 .translate(movement.0 * MOVEMENT_SPEED * delta_time, Direction::Right);
         }
+    }
+
+    Ok(())
+}
+fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()> {
+    let game_state = engine.get_global_component_mut::<GameState>()?;
+    let points = &mut game_state.water_points;
+    let n = points.len();
+
+    for i in 1..n - 1 {
+        let point = &mut points[i];
+        let distance = (point.x - x).abs();
+
+        if distance < INFLUENCE_RADIUS {
+            // Linear falloff: full strength at the hit point, 0 at the radius
+            let influence = 1.0 - distance / INFLUENCE_RADIUS;
+            let velocity = strength * influence;
+            point.velocity = (point.velocity + velocity).clamp(-MAX_VELOCITY, MAX_VELOCITY);
+        }
+    }
+
+    Ok(())
+}
+fn add_bomb(engine: &mut Engine) -> Result<()> {
+    let game_state = engine.get_global_component_mut::<GameState>()?;
+    const DEBUG_X: f32 = 0.5;
+    const DEBUG_Y: f32 = 0.0;
+
+    let bomb = Bomb {
+        x: DEBUG_X,
+        y: DEBUG_Y,
+        time_to_detonate: 5.0,
+    };
+
+    game_state.bombs.push(bomb);
+
+    Ok(())
+}
+fn update_bombs(engine: &mut Engine) -> Result<()> {
+    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
+
+    // Scope the GameState borrow so it ends before kick_water borrows the engine again
+    let detonated_bombs: Vec<(f32, f32)> = {
+        let game_state = engine.get_global_component_mut::<GameState>()?;
+
+        for bomb in &mut game_state.bombs {
+            bomb.time_to_detonate -= delta_time;
+        }
+
+        let detonated_bombs: Vec<(f32, f32)> = game_state
+            .bombs
+            .iter()
+            .filter(|bomb| bomb.time_to_detonate <= 0.0)
+            .map(|bomb| (bomb.x, bomb.y))
+            .collect();
+
+        // Remove bombs that have detonated
+        game_state
+            .bombs
+            .retain(|bomb| bomb.time_to_detonate > 0.0);
+
+        detonated_bombs
+    };
+
+    // Kick the water points based on the detonated bombs
+    for (x, y) in detonated_bombs {
+        kick_water(engine, x, y, KICK_STRENGTH)?;
     }
 
     Ok(())
