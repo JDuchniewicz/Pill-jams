@@ -61,7 +61,6 @@ impl PillGame for Game {
         //engine.add_system("rotation_system", rotation_system)?;
         engine.add_system("evolve_waves", evolve_waves)?;
         engine.add_system("update_bombs", update_bombs)?;
-        engine.add_system("playa_system", playa_system)?;
 
         // --- Visuals setup ---
         crate::visuals::start(engine, active_scene)?;
@@ -179,8 +178,8 @@ pub fn add_bomb(engine: &mut Engine, x: f32, y: f32) -> Result<()> {
     const DEBUG_Y: f32 = 0.0;
 
     let bomb = Bomb {
-        x: DEBUG_X,
-        y: DEBUG_Y,
+        x: x,
+        y: y,
         time_to_detonate: TIME_TO_DETONATE,
     };
 
@@ -216,19 +215,6 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
     for (x, y) in detonated_bombs {
         kick_water(engine, x, y, KICK_STRENGTH)?;
     }
-
-    Ok(())
-}
-fn playa_system(engine: &mut Engine) -> Result<()> {
-    let space_pressed = engine
-        .get_global_component::<InputComponent>()?
-        .get_key_pressed(KeyboardKey::Space);
-
-    if space_pressed {
-        add_bomb(engine, 0.0, 0.0)?;
-    }
-
-    update_bombs(engine)?;
 
     Ok(())
 }
