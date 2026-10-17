@@ -106,8 +106,8 @@ pub mod game {
 
     extern crate pill_core;
     pub use pill_core::{
-        create_game, define_new_pill_slotmap_key, Color, PillTypeMapKey, Vector2f, Vector2i,
-        Vector3f, DISTINCT_COLOR_PALETTE,
+        create_game, define_new_pill_slotmap_key, Color, Direction, PillTypeMapKey, Vector2f,
+        Vector2i, Vector3f, DISTINCT_COLOR_PALETTE,
     };
 
     pub use pill_core::{ErrorContext, PillError, Result};

@@ -2,13 +2,19 @@ use pill_engine::{define_component, define_global_component, game::*};
 
 use std::sync::{Arc, Mutex};
 
+// TODO: for now we are playing locally -> maybe also play over network
+const NUM_PLAYERS: u8 = 2;
+const MOVEMENT_SPEED: f32 = 2.0;
+const DZ: f32 = 0.1;
+
 pub struct WaterPoint {
     pub x: f32,
     pub y: f32,
     pub velocity: f32,
 }
 
-define_component!(TagAlphaComponent {});
+define_component!(PlayerComponent { id: PlayerId });
+
 define_global_component!(GameState{
    bombs: Vec<i32>,
    last_bomb: i32,
@@ -35,10 +41,12 @@ impl PillGame for Game {
         engine.register_component::<TagAlphaComponent>(active_scene)?;
         engine.register_component::<AudioListenerComponent>(active_scene)?;
         engine.register_component::<AudioSourceComponent>(active_scene)?;
+        engine.register_component::<PlayerComponent>(active_scene)?;
 
         // Add game systems
-        engine.add_system("rotation_system", rotation_system)?;
+        //engine.add_system("rotation_system", rotation_system)?;
         engine.add_system("evolve_waves", evolve_waves)?;
+        engine.add_system("player_movement_system", player_movement_system)?;
 
         // --- Visuals setup ---
         crate::visuals::start(engine, active_scene)?;
@@ -61,7 +69,6 @@ impl PillGame for Game {
                 });
         })?;
 
-
         // -- initialize the wave component --
         engine
             .add_global_component(
@@ -77,8 +84,7 @@ impl PillGame for Game {
                         .collect(),
                 }
             )?;
-            
-            
+
         Ok(())
     }
 }
@@ -97,6 +103,7 @@ fn rotation_system(engine: &mut Engine) -> Result<()> {
 
     Ok(())
 }
+
 fn evolve_waves(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
     #[cfg(debug_assertions)]
@@ -156,6 +163,54 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
         points[0].y = 0.0;
         points[n - 1].velocity = 0.0;
         points[n - 1].y = 0.0;
+    }
+    Ok(())
+}
+
+fn player_movement_system(engine: &mut Engine) -> Result<()> {
+    let input = engine.get_global_component::<InputComponent>()?;
+
+    // movements
+    let movements: [(f32, f32); NUM_PLAYERS as usize] = {
+        std::array::from_fn(|i| {
+            let id = PlayerId::try_from(i as u8).unwrap();
+            let l_stick_y = input.get_gamepad_axis(id, GamepadAxis::LeftStickY);
+            let l_stick_x = input.get_gamepad_axis(id, GamepadAxis::LeftStickX);
+            (l_stick_x, l_stick_y)
+        })
+    };
+
+    // wobbles
+    let wobbles: [(f32, f32); NUM_PLAYERS as usize] = {
+        std::array::from_fn(|i| {
+            let id = PlayerId::try_from(i as u8).unwrap();
+            let r_stick_y = input.get_gamepad_axis(id, GamepadAxis::RightStickY);
+            let r_stick_x = input.get_gamepad_axis(id, GamepadAxis::RightStickX);
+            (r_stick_x, r_stick_y)
+        })
+    };
+
+    // actions
+
+    // TODO: debug - this just moves one player
+    //let (k_w,k_s,k_a,k_d)=(
+    //    input.get_key(KeyboardKey::KeyW),
+    //    input.get_key(KeyboardKey::KeyS),
+    //    input.get_key(KeyboardKey::KeyA),
+    //    input.get_key(KeyboardKey::KeyD));
+
+    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
+
+    for (_, transform_component, player_component) in
+        engine.iterate_two_components_mut::<TransformComponent, PlayerComponent>()?
+    {
+        let movement = movements[player_component.id as usize];
+
+        // TODO: check which is which
+        if movement.0.abs() > DZ {
+            transform_component
+                .translate(movement.0 * MOVEMENT_SPEED * delta_time, Direction::Right);
+        }
     }
 
     Ok(())

@@ -1,7 +1,7 @@
 use pill_engine::{define_global_component, game::*};
 
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
-use crate::game::{GameUIStateComponent, TagAlphaComponent};
+use crate::game::{GameUIStateComponent, PlayerComponent};
 
 // --- Point-cloud driven procedural mesh ---
 
@@ -119,7 +119,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .mesh(&chimpanzini_bananini_mesh_handle)
                 .build(),
         )
-        .with_component(TagAlphaComponent {})
+        .with_component(PlayerComponent{id: PlayerId::Player1})
         .build();
 
     engine
@@ -135,23 +135,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .mesh(&chimpanzini_bananini_mesh_handle)
                 .build(),
         )
-        .with_component(TagAlphaComponent {})
-        .build();
-
-    // Drawn by the game-defined CartoonPass (posterize)
-    engine
-        .build_entity(active_scene)
-        .with_component(
-            TransformComponent::builder()
-                .position(Vector3f::new(0.0, 0.0, 1.5))
-                .build(),
-        )
-        .with_component(CartoonComponent {
-            mesh: chimpanzini_bananini_mesh_handle,
-            texture: chimpanzini_bananini_color_texture_handle,
-            posterize_level: 3.0,
-        })
-        .with_component(TagAlphaComponent {})
+        .with_component(PlayerComponent{id:PlayerId::Player2})
         .build();
 
     // Procedural polygon driven by the PointsComponent
