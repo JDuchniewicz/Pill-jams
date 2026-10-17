@@ -2,6 +2,7 @@ mod cartoon_pass;
 mod game;
 mod player;
 mod visuals;
+mod water;
 mod water_visuals;
 use pill_engine::game::create_game;
 
