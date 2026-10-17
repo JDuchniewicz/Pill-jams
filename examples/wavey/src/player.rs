@@ -1,14 +1,19 @@
-use pill_engine::game::*;
+use pill_engine::{define_component, game::*};
 
-use crate::game::PlayerComponent;
 use crate::water::add_bomb;
+
+define_component!(PlayerComponent { id: PlayerId });
 
 // TODO: for now we are playing locally -> maybe also play over network
 const NUM_PLAYERS: u8 = 2;
-const MOVEMENT_SPEED: f32 = 2.0;
+const THRUST_FORCE: f32 = 25.0;
 const DZ: f32 = 0.1;
 
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
+    engine.register_component::<RigidBodyComponent>(active_scene)?;
+    engine.register_component::<ColliderComponent>(active_scene)?;
+    engine.register_component::<PlayerComponent>(active_scene)?;
+
     engine.add_system("player_movement_system", player_movement_system)?;
 
     let ship_texture_handle = engine.add_resource::<Texture>(Texture::new(
@@ -33,10 +38,35 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .depth_test(false)
                 .build(),
         )
+        .with_component(
+            RigidBodyComponent::builder()
+                .body_type(RigidBodyType::Dynamic)
+                .linear_damping(5.0)
+                .angular_damping(3.0)
+                .locked_axes(
+                    LockedAxes::TRANSLATION_LOCKED_Z
+                        | LockedAxes::ROTATION_LOCKED_X
+                        | LockedAxes::ROTATION_LOCKED_Y,
+                )
+                .ccd_enabled(true)
+                .build(),
+        )
+        .with_component(
+            ColliderComponent::builder()
+                .shape(SharedShape::cuboid(0.5, 0.8, 0.5))
+                .friction(0.4)
+                .restitution(0.0)
+                .mass(1.0)
+                .build(),
+        )
         .with_component(PlayerComponent {
             id: PlayerId::Player1,
         })
         .build();
+
+    // TODO: re-enable wwhen buyonacy
+    let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
+    physics.set_gravity(Vector3f::new(0.0, 0.0, 0.0));
 
     Ok(())
 }
@@ -44,7 +74,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
-    let (movements, _wobbles, drop_bombs, delta_time) = {
+    let (movements, _wobbles, drop_bombs) = {
         let input = engine.get_global_component::<InputComponent>()?;
 
         // movements
@@ -70,21 +100,41 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 || input.get_key_pressed(KeyboardKey::Space)
         });
 
-        let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
-        (movements, wobbles, drop_bombs, delta_time)
+        (movements, wobbles, drop_bombs)
     };
+
+    // Collect player rigid body handles and input values
+    let mut ships = Vec::new();
+
+    for (_, rb, player) in
+        engine.iterate_two_components_mut::<RigidBodyComponent, PlayerComponent>()?
+    {
+        if let Some(handle) = rb.get_rigid_body_handle() {
+            let input_x = movements[player.id as usize].0;
+            ships.push((handle, input_x));
+        }
+    }
+
+    // Access Rapier's actual bodies
+    let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
+
+    for (handle, input_x) in ships {
+        let Some(body) = physics.rigid_body_set.get_mut(handle) else {
+            continue;
+        };
+
+        body.reset_forces(true);
+
+        // Apply thrust along X
+        if input_x.abs() > DZ {
+            body.add_force(Vector3f::new(-input_x * THRUST_FORCE, 0.0, 0.0), true);
+        }
+    }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
     for (_, transform_component, player_component) in
         engine.iterate_two_components_mut::<TransformComponent, PlayerComponent>()?
     {
-        let movement = movements[player_component.id as usize];
-
-        // TODO: check which is which
-        if movement.0.abs() > DZ {
-            transform_component
-                .translate(movement.0 * MOVEMENT_SPEED * delta_time, Direction::Left);
-        }
         if drop_bombs[player_component.id as usize] {
             //        add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
             bomb_positions.push((
@@ -97,5 +147,6 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     for (x, y) in bomb_positions {
         add_bomb(engine, x, y)?;
     }
+
     Ok(())
 }

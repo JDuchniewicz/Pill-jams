@@ -4,8 +4,6 @@ use pill_engine::{define_component, define_global_component, game::*};
 
 use std::sync::{Arc, Mutex};
 
-define_component!(PlayerComponent { id: PlayerId });
-
 // Orthographic size shared with the egui overlay (updated by `camera_zoom_system`).
 // `Arc<Mutex<_>>` allows the UI callback (which only receives `&egui::Context`) to read it.
 define_global_component!(GameUIStateComponent {
@@ -34,7 +32,6 @@ impl PillGame for Game {
         // Register game-specific components
         engine.register_component::<AudioListenerComponent>(active_scene)?;
         engine.register_component::<AudioSourceComponent>(active_scene)?;
-        engine.register_component::<PlayerComponent>(active_scene)?;
 
         // --- Water simulation (must exist before visuals builds the water mesh) ---
         crate::water::start(engine)?;

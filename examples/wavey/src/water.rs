@@ -15,12 +15,18 @@ pub struct Bomb {
 define_global_component!(GameState {
     bombs: Vec<Bomb>,
     water_points: Vec<WaterPoint>,
+    // Seconds left until the next random swell.
+    time_until_swell: f32,
 });
 
 const INFLUENCE_RADIUS: f32 = 0.1;
 const MAX_VELOCITY: f32 = 200.0;
 const KICK_STRENGTH: f32 = 150.0;
 pub const TIME_TO_DETONATE: f32 = 1.0;
+
+/// Random delay range between swells, in seconds.
+const SWELL_INTERVAL_MIN: f32 = 1.0;
+const SWELL_INTERVAL_MAX: f32 = 3.0;
 
 /// World-space span of the normalized water-point X coordinates (0..1).
 /// Shared with the visual mesh, which maps 0..1 onto this span.
@@ -42,10 +48,12 @@ pub fn start(engine: &mut Engine) -> Result<()> {
                 velocity: 0.0,
             })
             .collect(),
+        time_until_swell: rand::random_range(SWELL_INTERVAL_MIN..SWELL_INTERVAL_MAX),
     })?;
 
     engine.add_system("evolve_waves", evolve_waves)?;
     engine.add_system("update_bombs", update_bombs)?;
+    engine.add_system("swell_system", swell_system)?;
 
     Ok(())
 }
@@ -141,7 +149,8 @@ fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()>
             // Linear falloff: full strength at the hit point, 0 at the radius
             let influence = 1.0 - distance / INFLUENCE_RADIUS;
             let velocity = strength * influence;
-            point.velocity = (point.velocity + velocity).clamp(-MAX_VELOCITY, MAX_VELOCITY);
+            //point.velocity = (point.velocity + velocity).clamp(-MAX_VELOCITY, MAX_VELOCITY);
+            point.velocity = (point.velocity + velocity);
         }
     }
 
@@ -190,5 +199,44 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
         kick_water(engine, x, y, KICK_STRENGTH)?;
     }
 
+    Ok(())
+}
+fn swell_system(engine: &mut Engine) -> Result<()> {
+    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
+
+    // Scope the GameState borrow so it ends before `swell` borrows the engine again.
+    let should_swell = {
+        let game_state = engine.get_global_component_mut::<GameState>()?;
+        game_state.time_until_swell -= delta_time;
+
+        if game_state.time_until_swell <= 0.0 {
+            // Schedule the next swell at a fresh random time.
+            game_state.time_until_swell =
+                rand::random_range(SWELL_INTERVAL_MIN..SWELL_INTERVAL_MAX);
+            true
+        } else {
+            false
+        }
+    };
+
+    if should_swell {
+        // A swell rolls in from a random end of the water.
+        let direction1 = rand::random_range(-0.9..0.9);
+        let direction2 = rand::random_range(-0.1..0.1) + direction1; 
+        swell(engine, direction1, direction2)?;
+
+    }
+
+    Ok(())
+}
+
+fn swell(engine: &mut Engine, direction: f32, direction2 : f32) -> Result<()> {
+    let strength = rand::random_range(50.0..150.0);
+    let strength2: f32 = rand::random_range(50.0..150.0);
+
+    // Water points are normalized to 0..1; a swell enters from one end.
+
+    kick_water(engine, direction, 0.0, strength)?;
+    kick_water(engine, direction2, 0.0, strength2)?;
     Ok(())
 }
