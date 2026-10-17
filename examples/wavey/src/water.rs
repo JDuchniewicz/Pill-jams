@@ -23,7 +23,7 @@ const KICK_STRENGTH: f32 = 150.0;
 pub const TIME_TO_DETONATE: f32 = 1.0;
 
 /// World-space span of the normalized water-point X coordinates (0..1).
-/// Shared with the visual mesh so world-space bomb positions map to the right water point.
+/// Shared with the visual mesh, which maps 0..1 onto this span.
 pub(crate) const WATER_X_MIN: f32 = -100.0;
 pub(crate) const WATER_X_MAX: f32 = 100.0;
 
@@ -69,36 +69,42 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // Keep the explicit integration stable: WAVE_SPEED * dt / dx <= 1.
-    // Subdivide the frame when delta_time is too large.
+    // Explicit integration is only stable while WAVE_SPEED * dt / dx <= 1.
+    // Subdivide the frame so every substep stays well inside that bound.
     let max_dt = 0.5 * dx / WAVE_SPEED;
     let steps = (delta_time / max_dt).ceil().max(1.0) as u32;
     let step_dt = delta_time / steps as f32;
+    let damping = (1.0 - DAMPING * step_dt).max(0.0);
 
-    let mut velocities = vec![0.0f32; n];
+    let mut accel = vec![0.0f32; n];
+    let mut next_y = vec![0.0f32; n];
 
     for _ in 0..steps {
-        // Pass 1: compute new velocities from the current displacements
+        // Acceleration from the current displacements
         for i in 1..n - 1 {
-            let left = points[i - 1].y;
-            let center = points[i].y;
-            let right = points[i + 1].y;
+            let laplacian = points[i - 1].y - 2.0 * points[i].y + points[i + 1].y;
+            accel[i] = WAVE_SPEED * WAVE_SPEED * laplacian / (dx * dx);
+        }
 
-            // Second spatial derivative of the displacement
+        // Velocity Verlet, half step 1: advance position with the current velocity
+        for i in 1..n - 1 {
+            let v_half = points[i].velocity + 0.5 * accel[i] * step_dt;
+            points[i].velocity = v_half;
+            next_y[i] = points[i].y + v_half * step_dt;
+        }
+
+        // Acceleration at the new positions (fixed ends count as 0)
+        for i in 1..n - 1 {
+            let left = if i == 1 { 0.0 } else { next_y[i - 1] };
+            let center = next_y[i];
+            let right = if i == n - 2 { 0.0 } else { next_y[i + 1] };
+
             let laplacian = left - 2.0 * center + right;
             let acceleration = WAVE_SPEED * WAVE_SPEED * laplacian / (dx * dx);
 
-            // Semi-implicit Euler: update velocity, then position
-            let mut velocity = points[i].velocity + acceleration * step_dt;
-            velocity *= (1.0 - DAMPING * step_dt).max(0.0);
-
-            velocities[i] = velocity;
-        }
-
-        // Pass 2: integrate the new velocities into the positions
-        for i in 1..n - 1 {
-            points[i].velocity = velocities[i];
-            points[i].y += velocities[i] * step_dt;
+            // Velocity Verlet, half step 2: finish the velocity update (with damping)
+            points[i].velocity = (points[i].velocity + 0.5 * acceleration * step_dt) * damping;
+            points[i].y = center;
         }
 
         // Reflective boundaries: ends are fixed
@@ -106,6 +112,17 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
         points[0].y = 0.0;
         points[n - 1].velocity = 0.0;
         points[n - 1].y = 0.0;
+    }
+
+    // Safety net: never let non-finite values reach the mesh builder.
+    if points
+        .iter()
+        .any(|point| !point.y.is_finite() || !point.velocity.is_finite())
+    {
+        for point in points.iter_mut() {
+            point.y = 0.0;
+            point.velocity = 0.0;
+        }
     }
 
     Ok(())
@@ -131,16 +148,12 @@ fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()>
     Ok(())
 }
 
-/// Queues a bomb at a world-space position. The X coordinate is converted to the
-/// normalized 0..1 range used by the simulated water points.
+/// Queues a bomb at a normalized water position (x in 0..1).
 pub fn add_bomb(engine: &mut Engine, x: f32, y: f32) -> Result<()> {
-    let normalized_x =
-        ((x - WATER_X_MIN) / (WATER_X_MAX - WATER_X_MIN)).clamp(0.0, 1.0);
-
     let game_state = engine.get_global_component_mut::<GameState>()?;
-
+    let normalized_x = (x - WATER_X_MIN) / (WATER_X_MAX - WATER_X_MIN);
     game_state.bombs.push(Bomb {
-        x: normalized_x,
+       x: normalized_x,
         y,
         time_to_detonate: TIME_TO_DETONATE,
     });
@@ -179,3 +192,4 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
 
     Ok(())
 }
+fn swell(engine: &mut Engine, dir: i32) -> Result<()>

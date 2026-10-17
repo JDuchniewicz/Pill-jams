@@ -1,6 +1,6 @@
 use pill_engine::{define_global_component, game::*};
 
-use crate::game::{GameState, WaterPoint};
+use crate::water::{GameState, WaterPoint, WATER_X_MAX, WATER_X_MIN};
 
 // --- Water-surface driven procedural mesh ---
 
@@ -11,9 +11,6 @@ define_global_component!(PointsComponent {
 const POINT_Z: f32 = 1.0;
 /// Extra outline points added this far below each end of the water surface.
 const WATER_BOTTOM_OFFSET: f32 = -100.0;
-/// World-space span of the normalized water-point X coordinates (0..1).
-const WATER_X_MIN: f32 = -100.0;
-const WATER_X_MAX: f32 = 100.0;
 
 /// Maps a normalized water-point X (0..1) to the world-space surface span.
 fn water_world_x(normalized_x: f32) -> f32 {
@@ -109,7 +106,14 @@ fn points_system(engine: &mut Engine) -> Result<()> {
     };
 
     // Deform the filled water body to the current surface positions.
-    engine.update_mesh(&mesh_handle, MeshData::from_polygon(&outline)?)?;
+    // A malformed frame must not take the whole game down: skip the mesh update instead.
+    match MeshData::from_polygon(&outline) {
+        Ok(mesh_data) => engine.update_mesh(&mesh_handle, mesh_data)?,
+        Err(error) => {
+            eprintln!("points_system: skipping invalid water polygon: {error}");
+            return Ok(());
+        }
+    }
 
     // One primitive dot per simulated water point, always visible on top of the scene.
     for position in dots {
