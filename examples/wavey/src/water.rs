@@ -4,6 +4,8 @@ pub struct WaterPoint {
     pub x: f32,
     pub y: f32,
     pub velocity: f32,
+    pub horizontal_velocity_delta: f32,
+    pub vertical_velocity_delta : f32
 }
 
 pub struct Bomb {
@@ -45,6 +47,8 @@ pub fn start(engine: &mut Engine) -> Result<()> {
                 x: i as f32 / (WATER_POINT_COUNT - 1) as f32,
                 y: 0.0,
                 velocity: 0.0,
+                horizontal_velocity_delta: 0.0,
+                vertical_velocity_delta: 0.0,
             })
             .collect(),
         time_until_swell: rand::random_range(SWELL_INTERVAL_MIN..SWELL_INTERVAL_MAX),
@@ -112,11 +116,14 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
             // Velocity Verlet, half step 2: finish the velocity update (with damping)
             points[i].velocity = (points[i].velocity + 0.5 * acceleration * step_dt) * damping;
             points[i].y = center;
+            points[i].vertical_velocity_delta = acceleration*step_dt;
         }
 
         // Reflective boundaries: ends are fixed
         points[0].velocity = 0.0;
         points[0].y = 0.0;
+        points[0].horizontal_velocity_delta = 0.0;
+        points[0].vertical_velocity_delta = 0.0;
         points[n - 1].velocity = 0.0;
         points[n - 1].y = 0.0;
     }
@@ -149,6 +156,8 @@ fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()>
             let influence = 1.0 - distance / INFLUENCE_RADIUS;
             let velocity = strength * influence;
             //point.velocity = (point.velocity + velocity).clamp(-MAX_VELOCITY, MAX_VELOCITY);
+            let vertical_velocity_delta = velocity;
+            point.vertical_velocity_delta = ((vertical_velocity_delta).abs()-(point.velocity.abs())).abs();
             point.velocity = point.velocity + velocity;
         }
     }
