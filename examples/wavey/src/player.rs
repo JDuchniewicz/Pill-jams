@@ -17,6 +17,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     engine.register_component::<PlayerComponent>(active_scene)?;
 
     engine.add_system("player_movement_system", player_movement_system)?;
+    engine.add_system("submerge_system", submerge_system)?;
 
     let ship_texture_handle = engine.add_resource::<Texture>(Texture::new(
         "ship_test",
@@ -38,6 +39,8 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .size(Vector2f::new(20.0, 20.0))
                 // 2D game objects stay visible over the water and the other player
                 .depth_test(false)
+                // Hull below the water surface is drawn at half brightness
+                .submerge(0.5, 0.0)
                 .build(),
         )
         .with_component(
@@ -189,6 +192,40 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
     for (x, y) in bomb_positions {
         add_bomb(engine, x, y)?;
+    }
+
+    Ok(())
+}
+
+/// Keeps each sprite's waterline in sync with the procedural water surface, so the part of the
+/// sprite below the mesh's top edge is drawn at `submerge_factor` brightness.
+fn submerge_system(engine: &mut Engine) -> Result<()> {
+    // Sampling the water surface borrows the engine immutably, so collect positions first.
+    let mut sample_points: Vec<(EntityHandle, f32)> = Vec::new();
+    for (entity, transform, sprite) in
+        engine.iterate_two_components_mut::<TransformComponent, SpriteRenderingComponent>()?
+    {
+        // Sprites without a submerge effect (factor 1.0) do not need a waterline
+        if sprite.submerge_factor < 1.0 {
+            sample_points.push((entity, transform.position.x));
+        }
+    }
+
+    let mut waterlines: Vec<(EntityHandle, f32)> = Vec::with_capacity(sample_points.len());
+    for (entity, world_x) in sample_points {
+        waterlines.push((entity, water_height_at_x(engine, world_x)?));
+    }
+
+    if waterlines.is_empty() {
+        return Ok(());
+    }
+
+    for (entity, _, sprite) in
+        engine.iterate_two_components_mut::<TransformComponent, SpriteRenderingComponent>()?
+    {
+        if let Some((_, height)) = waterlines.iter().find(|(handle, _)| *handle == entity) {
+            sprite.set_submerge_height(*height);
+        }
     }
 
     Ok(())

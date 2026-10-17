@@ -121,6 +121,10 @@ pub const PRIMITIVE_POINT_VERTEX_SHADER: &str =
 pub const PRIMITIVE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/primitive_fragment.wgsl");
 pub const SPRITE_VERTEX_SHADER: &str = include_str!("../res/shaders/sprite_vertex.wgsl");
 pub const SPRITE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/sprite_fragment.wgsl");
+pub const SPRITE_SUBMERGED_VERTEX_SHADER: &str =
+    include_str!("../res/shaders/sprite_submerged_vertex.wgsl");
+pub const SPRITE_SUBMERGED_FRAGMENT_SHADER: &str =
+    include_str!("../res/shaders/sprite_submerged_fragment.wgsl");
 
 /// Maximum number of line segments queued per frame by `Engine::draw_line`
 /// (2 vertices each in the pass's vertex buffer).

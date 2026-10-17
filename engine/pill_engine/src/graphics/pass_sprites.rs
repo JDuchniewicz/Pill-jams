@@ -1,6 +1,6 @@
 use crate::config::{
     DEPTH_TARGET_FORMAT, HDR_TARGET_FORMAT, MAX_SPRITES, SPRITE_FRAGMENT_SHADER,
-    SPRITE_VERTEX_SHADER,
+    SPRITE_SUBMERGED_FRAGMENT_SHADER, SPRITE_SUBMERGED_VERTEX_SHADER, SPRITE_VERTEX_SHADER,
 };
 use crate::ecs::{SpriteRenderingComponent, TransformComponent};
 use crate::graphics::{
@@ -21,19 +21,21 @@ struct SpriteCameraUniform {
     camera_up: [f32; 4],
 }
 
-/// One sprite instance: quad center, half extent, tint, UV flips and the depth-test flag.
+/// One sprite instance: quad center, half extent, tint, UV flips, depth-test flag and the
+/// waterline (world Y + brightness factor below it).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct SpriteInstance {
-    center: [f32; 3],   // offset 0
+    center: [f32; 3],    // offset 0
     half_size: [f32; 2], // offset 12
-    color: [f32; 4],    // offset 20
-    uv_flip: [f32; 2],  // offset 36
-    depth_test: f32,    // offset 44
+    color: [f32; 4],     // offset 20
+    uv_flip: [f32; 2],   // offset 36
+    depth_test: f32,     // offset 44
+    submerge: [f32; 2],  // offset 48: x = waterline world Y, y = factor below it
 }
 
 // The attribute offsets below are hand-written, so pin the layout to them.
-const _: () = assert!(std::mem::size_of::<SpriteInstance>() == 48);
+const _: () = assert!(std::mem::size_of::<SpriteInstance>() == 56);
 
 impl SpriteInstance {
     fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
@@ -67,6 +69,11 @@ impl SpriteInstance {
                     shader_location: 4,
                     format: wgpu::VertexFormat::Float32,
                 },
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 5,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
             ],
         }
     }
@@ -81,6 +88,8 @@ struct SpriteDraw {
 
 struct SpritesState {
     pipeline: Pipeline,
+    /// Variant used by sprites with a waterline (`submerge_factor < 1.0`).
+    pipeline_submerged: Pipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     instance_buffer: wgpu::Buffer,
@@ -114,14 +123,14 @@ impl PassSprites {
             missing_texture_warned: false,
         }
     }
-}
 
-impl Pass for PassSprites {
-    fn get_label(&self) -> &str {
-        "pass_sprites"
-    }
-
-    fn init(&mut self, renderer: &mut dyn PillRenderer) -> Result<()> {
+    /// Builds a sprite pipeline for the given shader pair; both variants share the same layout.
+    fn create_pipeline(
+        renderer: &mut dyn PillRenderer,
+        label: &str,
+        vs_source: &'static str,
+        ps_source: &'static str,
+    ) -> Result<Pipeline> {
         let bind_groups = vec![
             // Camera uniform
             vec![wgpu::BindGroupLayoutEntry {
@@ -155,14 +164,14 @@ impl Pass for PassSprites {
             ],
         ];
 
-        let pipeline = renderer.create_pipeline(PipelineDesc {
-            label: Some("pass_sprites"),
+        renderer.create_pipeline(PipelineDesc {
+            label: Some(label),
             vs: ShaderDesc {
-                source: SPRITE_VERTEX_SHADER,
+                source: vs_source,
                 entry_func: "vs_main",
             },
             ps: ShaderDesc {
-                source: SPRITE_FRAGMENT_SHADER,
+                source: ps_source,
                 entry_func: "fs_main",
             },
             vertex_buffers: &[SpriteInstance::layout()],
@@ -192,7 +201,29 @@ impl Pass for PassSprites {
                 conservative: false,
                 unclipped_depth: false,
             },
-        })?;
+        })
+    }
+}
+
+impl Pass for PassSprites {
+    fn get_label(&self) -> &str {
+        "pass_sprites"
+    }
+
+    fn init(&mut self, renderer: &mut dyn PillRenderer) -> Result<()> {
+        let pipeline = Self::create_pipeline(
+            renderer,
+            "pass_sprites",
+            SPRITE_VERTEX_SHADER,
+            SPRITE_FRAGMENT_SHADER,
+        )?;
+        // Sprites with a waterline use a variant that darkens the submerged part
+        let pipeline_submerged = Self::create_pipeline(
+            renderer,
+            "pass_sprites_submerged",
+            SPRITE_SUBMERGED_VERTEX_SHADER,
+            SPRITE_SUBMERGED_FRAGMENT_SHADER,
+        )?;
 
         let camera_buffer = renderer.create_buffer(BufferDesc {
             label: Some("pass_sprites_camera"),
@@ -200,16 +231,17 @@ impl Pass for PassSprites {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })?;
 
-        let camera_bind_group = renderer
-            .get_device()
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("pass_sprites_camera_bind_group"),
-                layout: &pipeline.bind_group_layouts[0],
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: camera_buffer.as_entire_binding(),
-                }],
-            });
+        let camera_bind_group =
+            renderer
+                .get_device()
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("pass_sprites_camera_bind_group"),
+                    layout: &pipeline.bind_group_layouts[0],
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: camera_buffer.as_entire_binding(),
+                    }],
+                });
 
         let instance_buffer = renderer.create_buffer(BufferDesc {
             label: Some("pass_sprites_instances"),
@@ -219,6 +251,7 @@ impl Pass for PassSprites {
 
         self.state = Some(SpritesState {
             pipeline,
+            pipeline_submerged,
             camera_buffer,
             camera_bind_group,
             instance_buffer,
@@ -284,6 +317,7 @@ impl Pass for PassSprites {
                         if sprite.flip_y { 1.0 } else { 0.0 },
                     ],
                     depth_test: if sprite.depth_test { 1.0 } else { 0.0 },
+                    submerge: [sprite.submerge_height, sprite.submerge_factor],
                 },
             });
         }
@@ -297,7 +331,10 @@ impl Pass for PassSprites {
         let view_projection = camera_view_projection(camera_component, camera_transform);
         let camera_uniform = SpriteCameraUniform {
             view_projection: view_projection.to_cols_array_2d(),
-            camera_right: camera_transform.get_right_direction().extend(0.0).to_array(),
+            camera_right: camera_transform
+                .get_right_direction()
+                .extend(0.0)
+                .to_array(),
             camera_up: camera_transform.get_up_direction().extend(0.0).to_array(),
         };
 
@@ -329,9 +366,7 @@ impl Pass for PassSprites {
             }
             let Ok(texture) = world.renderer_texture(&sprite.texture_handle) else {
                 if !self.missing_texture_warned {
-                    log::warn!(
-                        "PassSprites: sprite texture is missing; the sprite is not drawn"
-                    );
+                    log::warn!("PassSprites: sprite texture is missing; the sprite is not drawn");
                     self.missing_texture_warned = true;
                 }
                 continue;
@@ -385,10 +420,12 @@ impl Pass for PassSprites {
             occlusion_query_set: None,
         });
 
-        render_pass.set_pipeline(&state.pipeline.pipeline);
         render_pass.set_vertex_buffer(0, state.instance_buffer.slice(..));
         render_pass.set_bind_group(0, &state.camera_bind_group, &[]);
 
+        // Sprites with a waterline use the submerged shader variant; alternate as needed so the
+        // order-based draw order is preserved.
+        let mut bound_submerged: Option<bool> = None;
         let mut bound_texture: Option<usize> = None;
         for (index, sprite) in self.sprites.iter().enumerate() {
             let Some(bind_group_index) = self
@@ -398,12 +435,18 @@ impl Pass for PassSprites {
             else {
                 continue;
             };
+            let submerged = sprite.instance.submerge[1] < 1.0;
+            if bound_submerged != Some(submerged) {
+                let pipeline = if submerged {
+                    &state.pipeline_submerged.pipeline
+                } else {
+                    &state.pipeline.pipeline
+                };
+                render_pass.set_pipeline(pipeline);
+                bound_submerged = Some(submerged);
+            }
             if bound_texture != Some(bind_group_index) {
-                render_pass.set_bind_group(
-                    1,
-                    &self.texture_bind_groups[bind_group_index].1,
-                    &[],
-                );
+                render_pass.set_bind_group(1, &self.texture_bind_groups[bind_group_index].1, &[]);
                 bound_texture = Some(bind_group_index);
             }
             let instance = index as u32;

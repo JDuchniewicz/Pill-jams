@@ -4,9 +4,7 @@ use crate::{
     resources::{Texture, TextureHandle},
 };
 
-use pill_core::{
-    get_type_name, Color, ErrorContext, PillStyle, PillTypeMapKey, Result, Vector2f,
-};
+use pill_core::{get_type_name, Color, ErrorContext, PillStyle, PillTypeMapKey, Result, Vector2f};
 
 // --- Builder ---
 
@@ -66,6 +64,15 @@ impl SpriteRenderingComponentBuilder {
         self
     }
 
+    /// Darkens the part of the sprite below a world-space line (`height`, world Y) by `factor`:
+    /// `submerge(0.5, water_y)` draws everything below `water_y` at half brightness.
+    /// `factor = 1.0` disables the effect.
+    pub fn submerge(mut self, factor: f32, height: f32) -> Self {
+        self.component.submerge_factor = factor.max(0.0);
+        self.component.submerge_height = height;
+        self
+    }
+
     pub fn build(self) -> SpriteRenderingComponent {
         self.component
     }
@@ -94,6 +101,12 @@ pub struct SpriteRenderingComponent {
     pub flip_x: bool,
     #[readonly]
     pub flip_y: bool,
+    /// World-space Y of the waterline; fragments below it are multiplied by `submerge_factor`.
+    #[readonly]
+    pub submerge_height: f32,
+    /// Brightness multiplier applied below `submerge_height` (1.0 = no effect).
+    #[readonly]
+    pub submerge_factor: f32,
 }
 
 impl Default for SpriteRenderingComponent {
@@ -116,6 +129,8 @@ impl SpriteRenderingComponent {
             depth_test: true,
             flip_x: false,
             flip_y: false,
+            submerge_height: 0.0,
+            submerge_factor: 1.0,
         }
     }
 
@@ -148,6 +163,17 @@ impl SpriteRenderingComponent {
         self.flip_x = flip_x;
         self.flip_y = flip_y;
     }
+
+    /// Sets the waterline (world Y) and the brightness factor applied below it.
+    pub fn set_submerge(&mut self, factor: f32, height: f32) {
+        self.submerge_factor = factor.max(0.0);
+        self.submerge_height = height;
+    }
+
+    /// Moves the waterline; keeps the current factor.
+    pub fn set_submerge_height(&mut self, height: f32) {
+        self.submerge_height = height;
+    }
 }
 
 impl PillTypeMapKey for SpriteRenderingComponent {
@@ -168,5 +194,6 @@ impl Component for SpriteRenderingComponent {
         Ok(())
     }
 
-    fn pass_handles(&mut self, _self_scene_handle: SceneHandle, _self_entity_handle: EntityHandle) {}
+    fn pass_handles(&mut self, _self_scene_handle: SceneHandle, _self_entity_handle: EntityHandle) {
+    }
 }
