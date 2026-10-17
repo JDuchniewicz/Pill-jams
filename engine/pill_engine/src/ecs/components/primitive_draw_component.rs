@@ -1,5 +1,7 @@
 use crate::ecs::components::{GlobalComponent, GlobalComponentStorage};
 
+use crate::config::PRIMITIVE_POINT_SIZE_PIXELS;
+
 use pill_core::{Color, PillTypeMapKey, Vector3f};
 
 use std::cell::{Cell, RefCell};
@@ -11,6 +13,9 @@ pub struct PrimitiveStyle {
     pub color: [f32; 4],
     /// `true` = occluded by scene geometry (depth-tested); `false` = always drawn on top.
     pub depth_test: bool,
+    /// Point size in pixels: `1.0` draws a single pixel and `0.0` hides the point.
+    /// Ignored by lines.
+    pub point_size: f32,
 }
 
 impl PrimitiveStyle {
@@ -19,6 +24,7 @@ impl PrimitiveStyle {
         Self {
             color: [color.x, color.y, color.z, 1.0],
             depth_test: true,
+            point_size: PRIMITIVE_POINT_SIZE_PIXELS,
         }
     }
 
@@ -27,12 +33,19 @@ impl PrimitiveStyle {
         Self {
             color: [color.x, color.y, color.z, 1.0],
             depth_test: false,
+            point_size: PRIMITIVE_POINT_SIZE_PIXELS,
         }
     }
 
     /// Replaces the alpha component.
     pub fn with_alpha(mut self, alpha: f32) -> Self {
         self.color[3] = alpha;
+        self
+    }
+
+    /// Sets the point size in pixels (`1.0` = one pixel, `0.0` = not visible). Lines ignore it.
+    pub fn with_point_size(mut self, point_size: f32) -> Self {
+        self.point_size = point_size.max(0.0);
         self
     }
 }
@@ -48,6 +61,7 @@ impl From<[f32; 3]> for PrimitiveStyle {
         Self {
             color: [color[0], color[1], color[2], 1.0],
             depth_test: true,
+            point_size: PRIMITIVE_POINT_SIZE_PIXELS,
         }
     }
 }
@@ -57,6 +71,7 @@ impl From<(f32, f32, f32)> for PrimitiveStyle {
         Self {
             color: [color.0, color.1, color.2, 1.0],
             depth_test: true,
+            point_size: PRIMITIVE_POINT_SIZE_PIXELS,
         }
     }
 }
@@ -75,6 +90,7 @@ pub(crate) struct PrimitiveLine {
 pub(crate) struct PrimitivePoint {
     pub position: [f32; 3],
     pub color: [f32; 4],
+    pub size: f32,
     pub depth_test: bool,
 }
 
@@ -135,6 +151,7 @@ impl PrimitiveDrawComponent {
         points.push(PrimitivePoint {
             position: [position.x, position.y, position.z],
             color: style.color,
+            size: style.point_size.max(0.0),
             depth_test: style.depth_test,
         });
     }

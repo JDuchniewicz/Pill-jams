@@ -4,8 +4,7 @@
 struct Camera {
     column_major float4x4 view_projection;
     float2                viewport;
-    float                 point_size;
-    float                 _padding;
+    float2                _padding;
 };
 [[vk::binding(0, 0)]] ConstantBuffer<Camera> camera;
 

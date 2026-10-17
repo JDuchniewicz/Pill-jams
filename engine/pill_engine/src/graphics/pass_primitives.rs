@@ -1,7 +1,6 @@
 use crate::config::{
     DEPTH_TARGET_FORMAT, HDR_TARGET_FORMAT, MAX_PRIMITIVE_LINES, MAX_PRIMITIVE_POINTS,
-    PRIMITIVE_FRAGMENT_SHADER, PRIMITIVE_POINT_SIZE_PIXELS, PRIMITIVE_POINT_VERTEX_SHADER,
-    PRIMITIVE_VERTEX_SHADER,
+    PRIMITIVE_FRAGMENT_SHADER, PRIMITIVE_POINT_VERTEX_SHADER, PRIMITIVE_VERTEX_SHADER,
 };
 use crate::ecs::PrimitiveDrawComponent;
 use crate::graphics::{
@@ -46,8 +45,44 @@ impl PrimitiveVertex {
 struct PrimitiveCameraUniform {
     view_projection: [[f32; 4]; 4],
     viewport: [f32; 2],
-    point_size: f32,
-    _padding: f32,
+    _padding: [f32; 2],
+}
+
+/// Per-instance point geometry: world-space position, color and screen-space size in pixels.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct PrimitivePointVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+    size: f32,
+}
+
+impl PrimitivePointVertex {
+    fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        use std::mem;
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<PrimitivePointVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: (mem::size_of::<[f32; 3]>() + mem::size_of::<[f32; 4]>())
+                        as wgpu::BufferAddress,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32,
+                },
+            ],
+        }
+    }
 }
 
 struct PrimitivesState {
@@ -69,14 +104,15 @@ struct PrimitivesState {
 /// the output stays in the HDR scene target and is tonemapped together with the rest of the scene.
 ///
 /// Topologies are `LineList` (1-pixel lines, the wgpu/WebGPU limit) and triangle-based
-/// screen-space quads for points (`PRIMITIVE_POINT_SIZE_PIXELS`). Both have depth-tested and
+/// screen-space quads for points. Point size is per command (`PrimitiveStyle::point_size`),
+/// so `1.0` draws a single pixel and `0.0` hides the point. Both have depth-tested and
 /// always-visible variants, selected per command via `PrimitiveStyle::depth_test`.
 pub struct PassPrimitives {
     color_target: PassTextureHandle,
     depth_target: PassTextureHandle,
     state: Option<PrimitivesState>,
     line_vertices: Vec<PrimitiveVertex>,
-    point_vertices: Vec<PrimitiveVertex>,
+    point_vertices: Vec<PrimitivePointVertex>,
 }
 
 impl PassPrimitives {
@@ -96,12 +132,13 @@ impl PassPrimitives {
         vs_source: &'static str,
         topology: wgpu::PrimitiveTopology,
         depth_test: bool,
-        instance_step: bool,
+        point_vertices: bool,
     ) -> Result<Pipeline> {
-        let mut vertex_layout = PrimitiveVertex::layout();
-        if instance_step {
-            vertex_layout.step_mode = wgpu::VertexStepMode::Instance;
-        }
+        let vertex_layout = if point_vertices {
+            PrimitivePointVertex::layout()
+        } else {
+            PrimitiveVertex::layout()
+        };
 
         let bind_groups = vec![vec![wgpu::BindGroupLayoutEntry {
             binding: 0,
@@ -131,18 +168,20 @@ impl PassPrimitives {
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_TARGET_FORMAT,
-                // Primitives never occlude scene geometry; they only get occluded by it.
-                depth_write_enabled: false,
-                depth_compare: if depth_test {
-                    wgpu::CompareFunction::LessEqual
-                } else {
-                    wgpu::CompareFunction::Always
-                },
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
+            // Depth-tested pipelines run in the scene pass; overlay pipelines run in a separate
+            // render pass without any depth attachment, so they can never be occluded.
+            depth_stencil: if depth_test {
+                Some(wgpu::DepthStencilState {
+                    format: DEPTH_TARGET_FORMAT,
+                    // Primitives never occlude scene geometry; they only get occluded by it.
+                    depth_write_enabled: false,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                })
+            } else {
+                None
+            },
             multisample: wgpu::MultisampleState::default(),
             primitive: wgpu::PrimitiveState {
                 topology,
@@ -221,7 +260,7 @@ impl Pass for PassPrimitives {
         })?;
         let point_vertex_buffer = renderer.create_buffer(BufferDesc {
             label: Some("pass_primitives_point_vertices"),
-            byte_size: (MAX_PRIMITIVE_POINTS * std::mem::size_of::<PrimitiveVertex>()) as u64,
+            byte_size: (MAX_PRIMITIVE_POINTS * std::mem::size_of::<PrimitivePointVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         })?;
 
@@ -258,8 +297,7 @@ impl Pass for PassPrimitives {
         let camera_uniform = PrimitiveCameraUniform {
             view_projection: view_projection.to_cols_array_2d(),
             viewport: [viewport_width.max(1) as f32, viewport_height.max(1) as f32],
-            point_size: PRIMITIVE_POINT_SIZE_PIXELS,
-            _padding: 0.0,
+            _padding: [0.0; 2],
         };
 
         // Depth-tested primitives first, always-visible ones last; each group is one draw call.
@@ -285,9 +323,14 @@ impl Pass for PassPrimitives {
         let mut tested_point_vertices = 0u32;
         for depth_test in [true, false] {
             for point in points.iter().filter(|point| point.depth_test == depth_test) {
-                self.point_vertices.push(PrimitiveVertex {
+                // A zero-size point collapses to nothing; skip it entirely.
+                if point.size <= 0.0 {
+                    continue;
+                }
+                self.point_vertices.push(PrimitivePointVertex {
                     position: point.position,
                     color: point.color,
+                    size: point.size,
                 });
             }
             if depth_test {
@@ -324,52 +367,74 @@ impl Pass for PassPrimitives {
             .get_render_target_view(self.depth_target)
             .expect("PassPrimitives: depth target missing");
 
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("pass_primitives_render_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
-
         let total_line_vertices = self.line_vertices.len() as u32;
-        if total_line_vertices > 0 {
-            render_pass.set_vertex_buffer(0, state.line_vertex_buffer.slice(..));
+        let total_point_vertices = self.point_vertices.len() as u32;
+
+        // Depth-tested commands: drawn with the scene depth buffer attached.
+        if tested_line_vertices > 0 || tested_point_vertices > 0 {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pass_primitives_depth_tested"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
             if tested_line_vertices > 0 {
+                render_pass.set_vertex_buffer(0, state.line_vertex_buffer.slice(..));
                 render_pass.set_pipeline(&state.line_pipeline.pipeline);
                 render_pass.set_bind_group(0, &state.camera_bind_group, &[]);
                 render_pass.draw(0..tested_line_vertices, 0..1);
             }
-            if tested_line_vertices < total_line_vertices {
-                render_pass.set_pipeline(&state.line_pipeline_overlay.pipeline);
-                render_pass.set_bind_group(0, &state.camera_bind_group, &[]);
-                render_pass.draw(tested_line_vertices..total_line_vertices, 0..1);
-            }
-        }
-
-        let total_point_vertices = self.point_vertices.len() as u32;
-        if total_point_vertices > 0 {
-            render_pass.set_vertex_buffer(0, state.point_vertex_buffer.slice(..));
             if tested_point_vertices > 0 {
+                render_pass.set_vertex_buffer(0, state.point_vertex_buffer.slice(..));
                 render_pass.set_pipeline(&state.point_pipeline.pipeline);
                 render_pass.set_bind_group(0, &state.camera_bind_group, &[]);
                 render_pass.draw(0..6, 0..tested_point_vertices);
             }
+        }
+
+        // Always-visible commands: their own render pass with no depth attachment at all.
+        if tested_line_vertices < total_line_vertices
+            || tested_point_vertices < total_point_vertices
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pass_primitives_overlay"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            if tested_line_vertices < total_line_vertices {
+                render_pass.set_vertex_buffer(0, state.line_vertex_buffer.slice(..));
+                render_pass.set_pipeline(&state.line_pipeline_overlay.pipeline);
+                render_pass.set_bind_group(0, &state.camera_bind_group, &[]);
+                render_pass.draw(tested_line_vertices..total_line_vertices, 0..1);
+            }
             if tested_point_vertices < total_point_vertices {
+                render_pass.set_vertex_buffer(0, state.point_vertex_buffer.slice(..));
                 render_pass.set_pipeline(&state.point_pipeline_overlay.pipeline);
                 render_pass.set_bind_group(0, &state.camera_bind_group, &[]);
                 render_pass.draw(0..6, tested_point_vertices..total_point_vertices);

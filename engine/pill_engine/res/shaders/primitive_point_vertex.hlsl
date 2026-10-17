@@ -4,14 +4,14 @@
 struct Camera {
     column_major float4x4 view_projection;
     float2                viewport;
-    float                 point_size;
-    float                 _padding;
+    float2                _padding;
 };
 [[vk::binding(0, 0)]] ConstantBuffer<Camera> camera;
 
 struct VertexInput {
     [[vk::location(0)]] float3 position; // per-instance
     [[vk::location(1)]] float4 color;    // per-instance
+    [[vk::location(2)]] float  size;     // per-instance, pixels
 };
 
 struct VertexOutput {
@@ -32,7 +32,7 @@ VertexOutput vs_main(VertexInput input, uint vertex_id : SV_VertexID) {
 
     VertexOutput output;
     float4 clip_position = mul(camera.view_projection, float4(input.position, 1.0));
-    float2 pixel_offset = corners[vertex_id] * camera.point_size / camera.viewport;
+    float2 pixel_offset = corners[vertex_id] * input.size / camera.viewport;
     clip_position.x += pixel_offset.x * clip_position.w;
     clip_position.y += pixel_offset.y * clip_position.w;
     output.sv_position = clip_position;

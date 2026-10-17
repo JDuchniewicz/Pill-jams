@@ -597,9 +597,16 @@ impl Engine {
         self.draw_line(origin, origin + direction * length, style)
     }
 
-    /// Queues a single point for this frame. Points are rendered as one-pixel `PointList`
-    /// primitives (the wgpu/WebGPU limit); use short lines or AABBs when larger markers
-    /// are needed.
+    /// Queues a single point for this frame, rendered as a screen-space square.
+    ///
+    /// The size comes from [`PrimitiveStyle::point_size`] (default
+    /// [`PRIMITIVE_POINT_SIZE_PIXELS`](crate::config::PRIMITIVE_POINT_SIZE_PIXELS)) and is
+    /// measured in pixels: `1.0` draws a single pixel, `0.0` hides the point. Override it per
+    /// command with [`PrimitiveStyle::with_point_size`]:
+    ///
+    /// ```ignore
+    /// engine.draw_point(position, PrimitiveStyle::overlay(color).with_point_size(1.0))?;
+    /// ```
     pub fn draw_point(
         &mut self,
         position: Vector3f,

@@ -125,7 +125,8 @@ pub const PRIMITIVE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/primiti
 pub const MAX_PRIMITIVE_LINES: usize = 16_384;
 /// Maximum number of points queued per frame by `Engine::draw_point`.
 pub const MAX_PRIMITIVE_POINTS: usize = 16_384;
-/// Screen-space size of points drawn with `Engine::draw_point`, in pixels.
+/// Default point size for `Engine::draw_point`, in pixels (`1.0` = one pixel).
+/// Override per command with `PrimitiveStyle::with_point_size`.
 pub const PRIMITIVE_POINT_SIZE_PIXELS: f32 = 6.0;
 
 /// Frame composition: opaque PBR → game-defined passes (`Engine::add_render_pass`) → tonemap → UI.

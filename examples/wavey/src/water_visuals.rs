@@ -113,7 +113,10 @@ fn points_system(engine: &mut Engine) -> Result<()> {
 
     // One primitive dot per simulated water point, always visible on top of the scene.
     for position in dots {
-        engine.draw_point(position, PrimitiveStyle::overlay(Color::new(0.1, 1.0, 0.4)))?;
+        engine.draw_point(
+            position,
+            PrimitiveStyle::overlay(Color::new(0.3, 1.0, 0.4)).with_point_size(1.0),
+        )?;
     }
 
     Ok(())
