@@ -56,6 +56,10 @@ pub use components::transform_component::TransformComponent;
 
 pub use components::mesh_rendering_component::MeshRenderingComponent;
 
+pub use components::sprite_rendering_component::{
+    SpriteRenderingComponent, SpriteRenderingComponentBuilder,
+};
+
 pub use components::time_component::TimeComponent;
 
 #[cfg(feature = "physics")]

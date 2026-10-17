@@ -6,6 +6,7 @@ mod dummy_renderer;
 mod pass_egui;
 mod pass_pbr_opaque;
 mod pass_primitives;
+mod pass_sprites;
 mod pass_tonemap;
 mod render_queue;
 mod renderer;
@@ -24,6 +25,7 @@ pub use self::dummy_renderer::DummyRenderer;
 pub use pass_egui::PassEgui;
 pub use pass_pbr_opaque::PassPBROpaque;
 pub use pass_primitives::PassPrimitives;
+pub use pass_sprites::PassSprites;
 pub use pass_tonemap::PassTonemap;
 
 pub use render_queue::{

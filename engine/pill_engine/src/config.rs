@@ -6,7 +6,7 @@ use crate::{
     },
     engine::Engine,
     graphics::{
-        Pass, PassPBROpaque, PassPrimitives, PassTonemap, RendererMaterialHandle,
+        Pass, PassPBROpaque, PassPrimitives, PassSprites, PassTonemap, RendererMaterialHandle,
         RendererTargetDesc, RendererTextureHandle, TargetSize,
     },
     renderer::resources::RendererTexture,
@@ -119,6 +119,8 @@ pub const PRIMITIVE_VERTEX_SHADER: &str = include_str!("../res/shaders/primitive
 pub const PRIMITIVE_POINT_VERTEX_SHADER: &str =
     include_str!("../res/shaders/primitive_point_vertex.wgsl");
 pub const PRIMITIVE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/primitive_fragment.wgsl");
+pub const SPRITE_VERTEX_SHADER: &str = include_str!("../res/shaders/sprite_vertex.wgsl");
+pub const SPRITE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/sprite_fragment.wgsl");
 
 /// Maximum number of line segments queued per frame by `Engine::draw_line`
 /// (2 vertices each in the pass's vertex buffer).
@@ -128,6 +130,9 @@ pub const MAX_PRIMITIVE_POINTS: usize = 16_384;
 /// Default point size for `Engine::draw_point`, in pixels (`1.0` = one pixel).
 /// Override per command with `PrimitiveStyle::with_point_size`.
 pub const PRIMITIVE_POINT_SIZE_PIXELS: f32 = 6.0;
+
+/// Maximum number of entities with a `SpriteRenderingComponent` drawn per frame.
+pub const MAX_SPRITES: usize = 4096;
 
 /// Frame composition: opaque PBR → game-defined passes (`Engine::add_render_pass`) → tonemap → UI.
 /// Creates the shared HDR and depth targets and records them in `RenderStateComponent`.
@@ -157,6 +162,8 @@ pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
         initial_ibl,
     ))];
     passes.append(&mut engine.custom_render_passes);
+    // Sprites are scene content: they composite over opaque geometry, under debug primitives.
+    passes.push(Box::new(PassSprites::new(hdr_target, depth_target)));
     // Queued lines/points draw over scene and game-pass content; both are HDR scene passes.
     passes.push(Box::new(PassPrimitives::new(hdr_target, depth_target)));
     passes.push(Box::new(PassTonemap::new(hdr_target)));

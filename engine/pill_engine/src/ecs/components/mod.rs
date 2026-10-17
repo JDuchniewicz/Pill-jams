@@ -28,6 +28,7 @@ pub(crate) mod primitive_draw_component;
 pub(crate) mod render_state_component;
 #[cfg(feature = "physics")]
 pub(crate) mod rigid_body_component;
+pub(crate) mod sprite_rendering_component;
 pub(crate) mod time_component;
 pub(crate) mod transform_component;
 

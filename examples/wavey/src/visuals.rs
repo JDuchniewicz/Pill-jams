@@ -24,6 +24,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     // Register graphics components
     engine.register_component::<TransformComponent>(active_scene)?;
     engine.register_component::<MeshRenderingComponent>(active_scene)?;
+    engine.register_component::<SpriteRenderingComponent>(active_scene)?;
     engine.register_component::<CartoonComponent>(active_scene)?;
     engine.register_component::<CameraComponent>(active_scene)?;
 
