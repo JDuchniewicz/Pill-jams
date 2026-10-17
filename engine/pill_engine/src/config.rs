@@ -134,7 +134,8 @@ pub const PRIMITIVE_POINT_SIZE_PIXELS: f32 = 6.0;
 /// Maximum number of entities with a `SpriteRenderingComponent` drawn per frame.
 pub const MAX_SPRITES: usize = 4096;
 
-/// Frame composition: opaque PBR → game-defined passes (`Engine::add_render_pass`) → tonemap → UI.
+/// Frame composition: game background passes (`Engine::add_background_pass`) → opaque PBR →
+/// game-defined passes (`Engine::add_render_pass`) → tonemap → UI.
 /// Creates the shared HDR and depth targets and records them in `RenderStateComponent`.
 pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
     let hdr_target = engine.renderer.create_render_target(RendererTargetDesc {
@@ -144,9 +145,14 @@ pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
     })?;
     let depth_target = engine.renderer.create_depth_texture(DEPTH_TARGET_NAME)?;
 
+    // Game-defined background passes run before the opaque PBR pass and fill the scene color.
+    let mut background_passes = std::mem::take(&mut engine.background_render_passes);
+
     let render_state = engine.get_global_component_mut::<RenderStateComponent>()?;
     render_state.hdr_target = hdr_target;
     render_state.depth_target = depth_target;
+    // With a background pass the PBR pass loads the color instead of clearing it
+    render_state.set_has_background_pass(!background_passes.is_empty());
     // Engine defaults, not the game's handles: the pass falls back to these if the game's are invalid
     let initial_ibl = render_state.default_ibl;
 
@@ -155,12 +161,14 @@ pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
         .config
         .get_int("MAX_ENTITIES")
         .unwrap_or(MAX_ENTITIES as i64) as usize;
-    let mut passes: Vec<Box<dyn Pass>> = vec![Box::new(PassPBROpaque::new(
+    let mut passes: Vec<Box<dyn Pass>> = Vec::new();
+    passes.append(&mut background_passes);
+    passes.push(Box::new(PassPBROpaque::new(
         hdr_target,
         depth_target,
         max_instances,
         initial_ibl,
-    ))];
+    )));
     passes.append(&mut engine.custom_render_passes);
     // Sprites are scene content: they composite over opaque geometry, under debug primitives.
     passes.push(Box::new(PassSprites::new(hdr_target, depth_target)));

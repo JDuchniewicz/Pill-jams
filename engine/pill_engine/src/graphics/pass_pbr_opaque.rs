@@ -798,7 +798,12 @@ impl Pass for PassPBROpaque {
                 view: color_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    // A game background pass already filled the scene color this frame
+                    load: if render_state.has_background_pass() {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                    },
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -873,7 +878,8 @@ impl Pass for PassPBROpaque {
 
         // Background sub-draw: within the same render pass, after opaque geometry.
         // LessEqual depth test + write_enabled=false: fills only pixels where depth == 1.0 (far plane = no geometry).
-        {
+        // Skipped when a game background pass already filled the scene color.
+        if !render_state.has_background_pass() {
             let bg = &state_ref.bg;
             let fwd = camera_forward(active_camera_transform);
             let right = fwd.cross(Vector3f::Y).normalize();

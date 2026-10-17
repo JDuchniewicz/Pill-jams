@@ -1,6 +1,7 @@
 mod cartoon_pass;
 mod game;
 mod player;
+mod uv_pass;
 mod visuals;
 mod water;
 mod water_visuals;

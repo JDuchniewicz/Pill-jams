@@ -49,6 +49,10 @@ impl PillRenderer for DummyRenderer {
         Ok(())
     }
 
+    fn insert_background_pass(&mut self, _pass: Box<dyn Pass>) -> Result<()> {
+        Ok(())
+    }
+
     fn get_surface_size(&self) -> (u32, u32) {
         (0, 0)
     }

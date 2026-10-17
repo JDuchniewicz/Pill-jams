@@ -212,6 +212,12 @@ impl PillRenderer for Renderer {
         Ok(())
     }
 
+    fn insert_background_pass(&mut self, mut pass: Box<dyn Pass>) -> Result<()> {
+        pass.init(self)?;
+        self.state.passes.insert(0, pass);
+        Ok(())
+    }
+
     fn get_surface_size(&self) -> (u32, u32) {
         (
             self.state.surface_configuration.width,

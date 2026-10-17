@@ -292,6 +292,9 @@ pub trait PillRenderer {
     /// Initializes `pass` and inserts it into the running chain before the tonemap pass.
     fn insert_pass(&mut self, pass: Box<dyn Pass>) -> Result<()>;
 
+    /// Initializes `pass` and inserts it at the front of the chain, before the opaque PBR pass.
+    fn insert_background_pass(&mut self, pass: Box<dyn Pass>) -> Result<()>;
+
     /// Returns the current surface dimensions `(width, height)` in pixels.
     fn get_surface_size(&self) -> (u32, u32);
 

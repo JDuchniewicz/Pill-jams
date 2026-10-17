@@ -26,6 +26,10 @@ pub struct RenderStateComponent {
     pub(crate) default_ibl: [PassTextureHandle; 3],
     /// Environment (equirect) image drawn behind the scene; `None` draws `background_color`.
     pub background: Option<PassTextureHandle>,
+    /// `true` when a game-defined background pass (`Engine::add_background_pass`) runs before the
+    /// opaque PBR pass: the scene color is then loaded instead of cleared, and the engine's own
+    /// background sub-draw is skipped.
+    pub(crate) has_background_pass: bool,
     /// Solid background color used when `background` is `None` (linear RGB).
     pub background_color: [f32; 3],
     pub ibl_diffuse: PassTextureHandle,
@@ -47,6 +51,7 @@ impl RenderStateComponent {
             depth_target: PassTextureHandle::default(),
             default_ibl: [PassTextureHandle::default(); 3],
             background: None,
+            has_background_pass: false,
             background_color: [0.15, 0.15, 0.15],
             ibl_diffuse: PassTextureHandle::default(),
             ibl_specular: PassTextureHandle::default(),
@@ -69,6 +74,15 @@ impl RenderStateComponent {
     /// Scene depth target (DEPTH_TARGET_FORMAT) for game-defined passes.
     pub fn depth_target(&self) -> PassTextureHandle {
         self.depth_target
+    }
+
+    /// `true` when a game-defined background pass already filled the scene color this frame.
+    pub fn has_background_pass(&self) -> bool {
+        self.has_background_pass
+    }
+
+    pub(crate) fn set_has_background_pass(&mut self, has_background_pass: bool) {
+        self.has_background_pass = has_background_pass;
     }
 }
 

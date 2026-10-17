@@ -1,7 +1,7 @@
 use pill_engine::game::*;
 
 use crate::cartoon_pass::CartoonPass;
-use crate::game::{GameUIStateComponent, PlayerComponent};
+use crate::game::GameUIStateComponent;
 
 // --- Camera / reference visuals ---
 

@@ -45,6 +45,8 @@ pub struct Engine {
     pub(crate) frame_delta_time: f32, // In milliseconds
     // Game-defined scene passes, moved into the renderer's pass chain on the first frame
     pub(crate) custom_render_passes: Vec<Box<dyn Pass>>,
+    // Game-defined passes that run before the opaque PBR pass (background fillers)
+    pub(crate) background_render_passes: Vec<Box<dyn Pass>>,
 }
 
 // ---- INTERNAL -----------------------------------------------------------------
@@ -78,6 +80,7 @@ impl Engine {
             game_resources_directory_path,
             frame_delta_time: 0.0,
             custom_render_passes: Vec::new(),
+            background_render_passes: Vec::new(),
         }
     }
 
@@ -102,6 +105,7 @@ impl Engine {
             game_resources_directory_path: std::path::PathBuf::new(),
             frame_delta_time: 0.0,
             custom_render_passes: Vec::new(),
+            background_render_passes: Vec::new(),
         }
     }
 
@@ -564,6 +568,26 @@ impl Engine {
         } else {
             // Picked up by default_pass_chain on the first frame
             self.custom_render_passes.push(pass);
+            Ok(())
+        }
+    }
+
+    /// Adds a game-defined pass that runs **before** the engine's opaque PBR pass, so it can fill
+    /// the scene background (a fullscreen quad, sky, gradient...). It renders into
+    /// `RenderStateComponent::hdr_target`; the PBR pass then loads the color instead of clearing it
+    /// and skips the engine's own background sub-draw.
+    pub fn add_background_pass(&mut self, pass: Box<dyn Pass>) -> Result<()> {
+        if self
+            .get_global_component::<RenderStateComponent>()?
+            .boot_done
+        {
+            self.renderer.insert_background_pass(pass)?;
+            self.get_global_component_mut::<RenderStateComponent>()?
+                .set_has_background_pass(true);
+            Ok(())
+        } else {
+            // Picked up by default_pass_chain on the first frame
+            self.background_render_passes.push(pass);
             Ok(())
         }
     }
