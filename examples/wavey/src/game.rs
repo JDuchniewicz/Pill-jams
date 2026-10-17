@@ -38,7 +38,6 @@ impl PillGame for Game {
         engine.set_active_scene(active_scene)?;
 
         // Register game-specific components
-        engine.register_component::<TagAlphaComponent>(active_scene)?;
         engine.register_component::<AudioListenerComponent>(active_scene)?;
         engine.register_component::<AudioSourceComponent>(active_scene)?;
         engine.register_component::<PlayerComponent>(active_scene)?;
@@ -70,39 +69,23 @@ impl PillGame for Game {
         })?;
 
         // -- initialize the wave component --
-        engine
-            .add_global_component(
-                GameState {
-                    bombs: Vec::new(),
-                    last_bomb: 0,
-                    water_points: (0..128)
-                        .map(|i| WaterPoint {
-                            x: i as f32 / 127.0,
-                            y: 0.0,
-                            velocity: 0.0,
-                        })
-                        .collect(),
-                }
-            )?;
+        engine.add_global_component(GameState {
+            bombs: Vec::new(),
+            last_bomb: 0,
+            water_points: (0..128)
+                .map(|i| WaterPoint {
+                    x: i as f32 / 127.0,
+                    y: 0.0,
+                    velocity: 0.0,
+                })
+                .collect(),
+        })?;
 
         Ok(())
     }
 }
 
 // --- Systems ---
-
-fn rotation_system(engine: &mut Engine) -> Result<()> {
-    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
-    //println!("Delta time: {}", delta_time);
-
-    for (_, transform_component, _) in
-        engine.iterate_two_components_mut::<TransformComponent, TagAlphaComponent>()?
-    {
-        transform_component.rotate_around_axis(90.0 * delta_time, Vector3f::new(0.0, 1.0, 0.0));
-    }
-
-    Ok(())
-}
 
 fn evolve_waves(engine: &mut Engine) -> Result<()> {
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;

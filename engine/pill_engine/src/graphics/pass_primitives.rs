@@ -1,6 +1,7 @@
 use crate::config::{
     DEPTH_TARGET_FORMAT, HDR_TARGET_FORMAT, MAX_PRIMITIVE_LINES, MAX_PRIMITIVE_POINTS,
-    PRIMITIVE_FRAGMENT_SHADER, PRIMITIVE_POINT_SIZE_PIXELS, PRIMITIVE_VERTEX_SHADER,
+    PRIMITIVE_FRAGMENT_SHADER, PRIMITIVE_POINT_SIZE_PIXELS, PRIMITIVE_POINT_VERTEX_SHADER,
+    PRIMITIVE_VERTEX_SHADER,
 };
 use crate::ecs::PrimitiveDrawComponent;
 use crate::graphics::{
@@ -92,7 +93,7 @@ impl PassPrimitives {
     fn create_pipeline(
         renderer: &mut dyn PillRenderer,
         label: &str,
-        vs_entry: &'static str,
+        vs_source: &'static str,
         topology: wgpu::PrimitiveTopology,
         depth_test: bool,
         instance_step: bool,
@@ -116,8 +117,8 @@ impl PassPrimitives {
         renderer.create_pipeline(PipelineDesc {
             label: Some(label),
             vs: ShaderDesc {
-                source: PRIMITIVE_VERTEX_SHADER,
-                entry_func: vs_entry,
+                source: vs_source,
+                entry_func: "vs_main",
             },
             ps: ShaderDesc {
                 source: PRIMITIVE_FRAGMENT_SHADER,
@@ -165,7 +166,7 @@ impl Pass for PassPrimitives {
         let line_pipeline = Self::create_pipeline(
             renderer,
             "pass_primitives_lines",
-            "vs_main",
+            PRIMITIVE_VERTEX_SHADER,
             wgpu::PrimitiveTopology::LineList,
             true,
             false,
@@ -173,7 +174,7 @@ impl Pass for PassPrimitives {
         let line_pipeline_overlay = Self::create_pipeline(
             renderer,
             "pass_primitives_lines_overlay",
-            "vs_main",
+            PRIMITIVE_VERTEX_SHADER,
             wgpu::PrimitiveTopology::LineList,
             false,
             false,
@@ -181,7 +182,7 @@ impl Pass for PassPrimitives {
         let point_pipeline = Self::create_pipeline(
             renderer,
             "pass_primitives_points",
-            "vs_point",
+            PRIMITIVE_POINT_VERTEX_SHADER,
             wgpu::PrimitiveTopology::TriangleList,
             true,
             true,
@@ -189,7 +190,7 @@ impl Pass for PassPrimitives {
         let point_pipeline_overlay = Self::create_pipeline(
             renderer,
             "pass_primitives_points_overlay",
-            "vs_point",
+            PRIMITIVE_POINT_VERTEX_SHADER,
             wgpu::PrimitiveTopology::TriangleList,
             false,
             true,

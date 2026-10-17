@@ -116,6 +116,8 @@ pub const BACKGROUND_FRAGMENT_SHADER: &str =
 pub const TONEMAP_VERTEX_SHADER: &str = include_str!("../res/shaders/tonemap_vertex.wgsl");
 pub const TONEMAP_FRAGMENT_SHADER: &str = include_str!("../res/shaders/tonemap_fragment.wgsl");
 pub const PRIMITIVE_VERTEX_SHADER: &str = include_str!("../res/shaders/primitive_vertex.wgsl");
+pub const PRIMITIVE_POINT_VERTEX_SHADER: &str =
+    include_str!("../res/shaders/primitive_point_vertex.wgsl");
 pub const PRIMITIVE_FRAGMENT_SHADER: &str = include_str!("../res/shaders/primitive_fragment.wgsl");
 
 /// Maximum number of line segments queued per frame by `Engine::draw_line`
