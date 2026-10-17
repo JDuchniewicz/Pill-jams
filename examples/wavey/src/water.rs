@@ -20,7 +20,6 @@ define_global_component!(GameState {
 });
 
 const INFLUENCE_RADIUS: f32 = 0.1;
-const MAX_VELOCITY: f32 = 200.0;
 const KICK_STRENGTH: f32 = 150.0;
 pub const TIME_TO_DETONATE: f32 = 1.0;
 
@@ -150,7 +149,7 @@ fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()>
             let influence = 1.0 - distance / INFLUENCE_RADIUS;
             let velocity = strength * influence;
             //point.velocity = (point.velocity + velocity).clamp(-MAX_VELOCITY, MAX_VELOCITY);
-            point.velocity = (point.velocity + velocity);
+            point.velocity = point.velocity + velocity;
         }
     }
 
@@ -239,4 +238,43 @@ fn swell(engine: &mut Engine, direction: f32, direction2 : f32) -> Result<()> {
     kick_water(engine, direction, 0.0, strength)?;
     kick_water(engine, direction2, 0.0, strength2)?;
     Ok(())
+}
+
+/// Interpolated water surface height at a world-space X position.
+pub fn water_height_at_x(engine: &Engine, world_x: f32) -> Result<f32> {
+    let game_state = engine.get_global_component::<GameState>()?;
+    let points = &game_state.water_points;
+    let n = points.len();
+
+    if n < 2 {
+        return Ok(0.0);
+    }
+
+    // Water points store normalized X (0..1); convert the query from world space.
+    let x = ((world_x - WATER_X_MIN) / (WATER_X_MAX - WATER_X_MIN)).clamp(0.0, 1.0);
+
+    if x <= points[0].x {
+        return Ok(points[0].y);
+    } else if x >= points[n - 1].x {
+        return Ok(points[n - 1].y);
+    }
+
+    // Average the points within a window around x (about 10 world units wide).
+    let mut sum = 0.0;
+    let mut count = 0;
+    for point in points {
+        if (point.x - x).abs() <= 0.05 {
+            sum += point.y;
+            count += 1;
+            if count >= 10 {
+                break;
+            }
+        }
+    }
+
+    if count > 0 {
+        Ok(sum / count as f32)
+    } else {
+        Ok(0.0)
+    }
 }
