@@ -1,7 +1,7 @@
 use pill_engine::game::*;
 
 use crate::cartoon_pass::CartoonPass;
-use crate::game::{GameUIStateComponent, PlayerComponent};
+use crate::game::GameUIStateComponent;
 
 // --- Camera / reference visuals ---
 
@@ -131,6 +131,11 @@ fn camera_zoom_system(engine: &mut Engine) -> Result<()> {
             ortho_size = Some(*vertical_size);
         }
     }
+
+    // TODO: implement later when implementing bigger screen sizes
+    // TODO: for now two players
+    // if the distance between two players is wider than screen size (- 2x some margin)
+    // we need to zoom out smoothly -> this also needs to be projected to screen size
 
     if let Some(ortho_size) = ortho_size {
         if let Ok(state) = engine.get_global_component::<GameUIStateComponent>() {
