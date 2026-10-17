@@ -1,6 +1,6 @@
 use pill_engine::game::*;
 
-use crate::cartoon_pass::{CartoonComponent, CartoonPass};
+use crate::cartoon_pass::CartoonPass;
 use crate::game::{GameUIStateComponent, PlayerComponent};
 
 // --- Camera / reference visuals ---
@@ -21,50 +21,15 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         render_state.tonemap = Tonemap::None;
     }
 
-    // Register graphics components
-    engine.register_component::<TransformComponent>(active_scene)?;
-    engine.register_component::<MeshRenderingComponent>(active_scene)?;
-    engine.register_component::<SpriteRenderingComponent>(active_scene)?;
-    engine.register_component::<CartoonComponent>(active_scene)?;
-    engine.register_component::<CameraComponent>(active_scene)?;
-
     // Add render passes
     engine.add_render_pass(Box::new(CartoonPass::new()))?;
 
     // Add the main visuals system
     engine.add_system("visuals_system", visuals_system)?;
     engine.add_system("camera_zoom_system", camera_zoom_system)?;
+    engine.add_system("sprite_bounds_system", sprite_bounds_system)?;
 
     // --- Create resources ---
-
-    let chimpanzini_bananini_mesh_handle = engine.add_resource(
-        Mesh::new(
-            "chimpanzini_bananini",
-            "models/chimpanzini_bananini.obj".into(),
-        )
-        .with_uv_flip(true),
-    )?;
-
-    let chimpanzini_bananini_color_texture_handle =
-        engine.add_resource::<Texture>(Texture::new(
-            "chimpanzini_bananini",
-            TextureType::Color,
-            ResourceLoader::Path("textures/chimpanzini_bananini_color.png".into()),
-        ))?;
-
-    // Unlit look: black albedo (no lighting response) + texture as emission
-    let chimpanzini_bananini_material_handle_unlit = engine.add_resource::<Material>(
-        Material::new("chimpanzini_bananini_unlit")
-            .albedo(Color::new(0.0, 0.0, 0.0))
-            .emissive(Color::new(1.0, 1.0, 1.0))
-            .emissive_texture(chimpanzini_bananini_color_texture_handle),
-    )?;
-
-    let chimpanzini_bananini_material_handle_lit = engine.add_resource::<Material>(
-        Material::new("chimpanzini_bananini_lit")
-            .albedo_texture(chimpanzini_bananini_color_texture_handle)
-            .roughness(0.5),
-    )?;
 
     // --- Create entities ---
 
@@ -84,43 +49,6 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
                 .orthographic(200.0)
                 .build(),
         )
-        .build();
-
-    engine
-        .build_entity(active_scene)
-        .with_component(
-            TransformComponent::builder()
-                .position(Vector3f::new(-1.0, 0.0, 0.0))
-                .scale(Vector3f::new(20.0, 20.0, 20.0))
-                .build(),
-        )
-        .with_component(
-            MeshRenderingComponent::builder()
-                .material(&chimpanzini_bananini_material_handle_lit)
-                .mesh(&chimpanzini_bananini_mesh_handle)
-                .build(),
-        )
-        .with_component(PlayerComponent {
-            id: PlayerId::Player1,
-        })
-        .build();
-
-    engine
-        .build_entity(active_scene)
-        .with_component(
-            TransformComponent::builder()
-                .position(Vector3f::new(1.0, 0.0, 0.0))
-                .build(),
-        )
-        .with_component(
-            MeshRenderingComponent::builder()
-                .material(&chimpanzini_bananini_material_handle_unlit)
-                .mesh(&chimpanzini_bananini_mesh_handle)
-                .build(),
-        )
-        .with_component(PlayerComponent {
-            id: PlayerId::Player2,
-        })
         .build();
 
     // Water body driven by GameState::water_points
@@ -210,6 +138,74 @@ fn camera_zoom_system(engine: &mut Engine) -> Result<()> {
                 .ortho_size
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = ortho_size;
+        }
+    }
+
+    Ok(())
+}
+
+/// Debug overlay driven by the "Sprite bounds" checkbox in the Wavey window: draws a primitive
+/// rectangle around every sprite, matching the quad the sprite pass builds.
+fn sprite_bounds_system(engine: &mut Engine) -> Result<()> {
+    let enabled = {
+        let Ok(state) = engine.get_global_component::<GameUIStateComponent>() else {
+            return Ok(());
+        };
+        *state
+            .draw_sprite_bounds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    };
+    if !enabled {
+        return Ok(());
+    }
+
+    // Same camera basis PassSprites uses for the quad, so the outline matches exactly.
+    let mut camera_frame = None;
+    for (_, transform, camera) in
+        engine.iterate_two_components::<TransformComponent, CameraComponent>()?
+    {
+        if camera.enabled {
+            camera_frame = Some((
+                transform.get_right_direction(),
+                transform.get_up_direction(),
+            ));
+            break;
+        }
+    }
+    let Some((right, up)) = camera_frame else {
+        return Ok(());
+    };
+
+    // Collect first: the component iteration borrows the engine, drawing borrows it again.
+    let mut outlines = Vec::new();
+    for (_, transform, sprite) in
+        engine.iterate_two_components::<TransformComponent, SpriteRenderingComponent>()?
+    {
+        if sprite.texture_handle.is_none() {
+            continue;
+        }
+        let half_size = Vector2f::new(
+            sprite.size.x * transform.scale.x * 0.5,
+            sprite.size.y * transform.scale.y * 0.5,
+        );
+        if half_size.x <= 0.0 || half_size.y <= 0.0 {
+            continue;
+        }
+        let center = transform.position;
+        let corner = |x: f32, y: f32| center + right * x + up * y;
+        outlines.push([
+            corner(-half_size.x, -half_size.y),
+            corner(-half_size.x, half_size.y),
+            corner(half_size.x, half_size.y),
+            corner(half_size.x, -half_size.y),
+        ]);
+    }
+
+    let style = PrimitiveStyle::overlay(Color::new(1.0, 0.0, 1.0));
+    for corners in outlines {
+        for i in 0..4 {
+            engine.draw_line(corners[i], corners[(i + 1) % 4], style)?;
         }
     }
 

@@ -127,8 +127,7 @@ mod internal_mod {
             client_go_offline, networking_system_client, networking_system_server,
             AudioListenerComponent, AudioManagerComponent, AudioSourceComponent, CameraAspectRatio,
             CameraComponent, CameraProjection, ComponentStorage, EntityHandle, EntityUpdate,
-            InputComponent,
-            MeshRenderingComponent, NetworkEntityAction, NetworkEntityState,
+            InputComponent, MeshRenderingComponent, NetworkEntityAction, NetworkEntityState,
             NetworkManagerComponent, NetworkSide, NetworkStateComponent, NetworkUpdatePayload,
             RenderStateComponent, Scene, TimeComponent, TransformComponent,
         },
@@ -157,8 +156,8 @@ mod internal_mod {
         config::*,
         ecs::{
             CameraAspectRatio, CameraComponent, CameraProjection, ComponentStorage, EntityHandle,
-            InputComponent,
-            MeshRenderingComponent, RenderStateComponent, Scene, TimeComponent, TransformComponent,
+            InputComponent, MeshRenderingComponent, RenderStateComponent, Scene, TimeComponent,
+            TransformComponent,
         },
         engine::{Engine, PillGame},
         graphics::{

@@ -8,8 +8,35 @@ const NUM_PLAYERS: u8 = 2;
 const MOVEMENT_SPEED: f32 = 2.0;
 const DZ: f32 = 0.1;
 
-pub fn start(engine: &mut Engine, _active_scene: SceneHandle) -> Result<()> {
+pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     engine.add_system("player_movement_system", player_movement_system)?;
+
+    let ship_texture_handle = engine.add_resource::<Texture>(Texture::new(
+        "ship_test",
+        TextureType::Color,
+        ResourceLoader::Path("textures/ship_test.png".into()),
+    ))?;
+
+    // Player 1 is a camera-facing sprite; the transform drives its world position.
+    engine
+        .build_entity(active_scene)
+        .with_component(
+            TransformComponent::builder()
+                .position(Vector3f::new(-1.0, 0.0, 0.0))
+                .build(),
+        )
+        .with_component(
+            SpriteRenderingComponent::builder()
+                .texture(&ship_texture_handle)
+                .size(Vector2f::new(20.0, 20.0))
+                // 2D game objects stay visible over the water and the other player
+                .depth_test(false)
+                .build(),
+        )
+        .with_component(PlayerComponent {
+            id: PlayerId::Player1,
+        })
+        .build();
 
     Ok(())
 }
@@ -40,13 +67,12 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         let drop_bombs: [bool; NUM_PLAYERS as usize] = std::array::from_fn(|i| {
             let id = PlayerId::try_from(i as u8).unwrap();
             input.get_gamepad_button_pressed(id, GamepadButton::A)
-            || input.get_key_pressed(KeyboardKey::Space)
+                || input.get_key_pressed(KeyboardKey::Space)
         });
 
         let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
         (movements, wobbles, drop_bombs, delta_time)
     };
-
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
     for (_, transform_component, player_component) in
@@ -60,7 +86,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 .translate(movement.0 * MOVEMENT_SPEED * delta_time, Direction::Left);
         }
         if drop_bombs[player_component.id as usize] {
-    //        add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
+            //        add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
             bomb_positions.push((
                 transform_component.position.x,
                 transform_component.position.y,

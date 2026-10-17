@@ -153,7 +153,7 @@ pub fn add_bomb(engine: &mut Engine, x: f32, y: f32) -> Result<()> {
     let game_state = engine.get_global_component_mut::<GameState>()?;
     let normalized_x = (x - WATER_X_MIN) / (WATER_X_MAX - WATER_X_MIN);
     game_state.bombs.push(Bomb {
-       x: normalized_x,
+        x: normalized_x,
         y,
         time_to_detonate: TIME_TO_DETONATE,
     });
@@ -192,4 +192,3 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
 
     Ok(())
 }
-fn swell(engine: &mut Engine, dir: i32) -> Result<()>

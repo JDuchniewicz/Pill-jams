@@ -1,4 +1,4 @@
-use crate::cartoon_pass::CartoonPass;
+use crate::cartoon_pass::{CartoonComponent, CartoonPass};
 use pill_engine::{define_component, define_global_component, game::*};
 
 use std::sync::{Arc, Mutex};
@@ -9,6 +9,7 @@ define_component!(PlayerComponent { id: PlayerId });
 // `Arc<Mutex<_>>` allows the UI callback (which only receives `&egui::Context`) to read it.
 define_global_component!(GameUIStateComponent {
     ortho_size: Arc<Mutex<f32>>,
+    draw_sprite_bounds: Arc<Mutex<bool>>,
 });
 
 pub struct Game {}
@@ -20,6 +21,13 @@ impl PillGame for Game {
         // Create scene
         let active_scene = engine.create_scene("default")?;
         engine.set_active_scene(active_scene)?;
+
+        // Register graphics components
+        engine.register_component::<TransformComponent>(active_scene)?;
+        engine.register_component::<MeshRenderingComponent>(active_scene)?;
+        engine.register_component::<SpriteRenderingComponent>(active_scene)?;
+        engine.register_component::<CartoonComponent>(active_scene)?;
+        engine.register_component::<CameraComponent>(active_scene)?;
 
         // Register game-specific components
         engine.register_component::<AudioListenerComponent>(active_scene)?;
@@ -38,11 +46,16 @@ impl PillGame for Game {
         // --- Camera scale UI ---
 
         let ortho_size = Arc::new(Mutex::new(200.0_f32));
+        let draw_sprite_bounds = Arc::new(Mutex::new(false));
         engine.add_global_component(GameUIStateComponent {
             ortho_size: Arc::clone(&ortho_size),
+            draw_sprite_bounds: Arc::clone(&draw_sprite_bounds),
         })?;
         engine.set_game_overlay(move |ctx| {
             let ortho_size = *ortho_size
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut draw_sprite_bounds = draw_sprite_bounds
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             egui::Window::new("Wavey")
@@ -50,11 +63,10 @@ impl PillGame for Game {
                 .default_pos(egui::pos2(10.0, 160.0))
                 .show(ctx, |ui| {
                     ui.label(format!("Ortho size: {:.1}", ortho_size));
+                    ui.checkbox(&mut draw_sprite_bounds, "Sprite bounds");
                 });
         })?;
 
         Ok(())
     }
 }
-
-
