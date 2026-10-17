@@ -18,10 +18,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     // Watch the shader directories so adding/removing a shader source re-runs the pipeline
     // even before its per-file rerun-if-changed entry exists in the build cache.
-    println!(
-        "cargo:rerun-if-changed={}",
-        root.join("shaders").display()
-    );
+    println!("cargo:rerun-if-changed={}", root.join("shaders").display());
     // Header-include directory: tracked recursively so changes to shared
     // structs (common.hlsl) re-trigger the build. The glob doesn't pick these
     // up (HlslToWgsl matches top-level shaders/*.hlsl only).
