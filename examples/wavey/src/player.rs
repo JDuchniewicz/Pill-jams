@@ -1,7 +1,9 @@
 use pill_engine::{define_component, game::*};
 
 use crate::water::add_bomb;
-
+use crate::water::water_height_at_x;
+const BUOYANCY_STRENGTH: f32 = 100.0;
+const SHIP_MASS: f32 = 1.0;
 define_component!(PlayerComponent { id: PlayerId });
 
 // TODO: for now we are playing locally -> maybe also play over network
@@ -66,7 +68,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
 
     // TODO: re-enable wwhen buyonacy
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
-    physics.set_gravity(Vector3f::new(0.0, 0.0, 0.0));
+   // physics.set_gravity(Vector3f::new(0.0, 0.0, 0.0));
 
     Ok(())
 }
@@ -115,10 +117,45 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
     }
 
-    // Access Rapier's actual bodies
+    // Read body positions first. This borrow of the physics world must end before
+    // querying the water surface through the engine.
+    let mut ship_states = Vec::new();
+    {
+        let physics = engine.get_global_component::<PhysicsWorldComponent>()?;
+
+        for (handle, input_x) in ships {
+            let Some(body) = physics.rigid_body_set.get(handle) else {
+                continue;
+            };
+
+            let translation = body.translation();
+            ship_states.push((
+                handle,
+                input_x,
+                Vector3f::new(translation.x, translation.y, translation.z),
+            ));
+        }
+    }
+
+    // Compute buoyancy from the current water height
+    let mut ship_forces = Vec::with_capacity(ship_states.len());
+    for (handle, input_x, player_position) in ship_states {
+        let water_height = water_height_at_x(engine, player_position.x)?;
+
+        let buoyancy_force = if player_position.y < water_height {
+            let depth = water_height - player_position.y;
+            Vector3f::new(0.0, depth * BUOYANCY_STRENGTH, 0.0)
+        } else {
+            Vector3f::new(0.0, 0.0, 0.0)
+        };
+
+        ship_forces.push((handle, input_x, buoyancy_force));
+    }
+
+    // Apply thrust and buoyancy to Rapier's bodies
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-    for (handle, input_x) in ships {
+    for (handle, input_x, buoyancy_force) in ship_forces {
         let Some(body) = physics.rigid_body_set.get_mut(handle) else {
             continue;
         };
@@ -128,6 +165,11 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         // Apply thrust along X
         if input_x.abs() > DZ {
             body.add_force(Vector3f::new(-input_x * THRUST_FORCE, 0.0, 0.0), true);
+        }
+
+        // Buoyancy pushes up while the player is below the water surface
+        if buoyancy_force.y != 0.0 {
+            body.add_force(buoyancy_force, true);
         }
     }
 
