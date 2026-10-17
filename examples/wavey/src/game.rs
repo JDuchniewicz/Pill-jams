@@ -192,8 +192,18 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         (movements, wobbles, drop_bombs, delta_time)
     };
 
-    if drop_bombs.iter().any(|pressed| *pressed) {
-        add_bomb(engine)?;
+    // actions
+    //drop a bomb
+    pub struct PlayerActions{
+        pub bomb_pressed: bool,
+    }
+    let actions: [PlayerActions; NUM_PLAYERS as usize] = {
+        std::array::from_fn(|i| { 
+            let id = PlayerId::try_from(i as u8).unwrap();
+            let bomb_pressed = input.get_gamepad_button(id, GamepadButton::RightShoulder);
+            PlayerActions{bomb_pressed}
+        }
+        )
     }
 
     // TODO: debug - this just moves one player
@@ -212,6 +222,9 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         if movement.0.abs() > DZ {
             transform_component
                 .translate(movement.0 * MOVEMENT_SPEED * delta_time, Direction::Right);
+        }
+        if (actions[player_component.id as usize].bomb_pressed){
+            add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
         }
     }
 
@@ -236,7 +249,7 @@ fn kick_water(engine: &mut Engine, x: f32, _y: f32, strength: f32) -> Result<()>
 
     Ok(())
 }
-fn add_bomb(engine: &mut Engine) -> Result<()> {
+fn add_bomb(engine: &mut Engine, x: f32, y: f32) -> Result<()> {
     let game_state = engine.get_global_component_mut::<GameState>()?;
     const DEBUG_X: f32 = 0.5;
     const DEBUG_Y: f32 = 0.0;
