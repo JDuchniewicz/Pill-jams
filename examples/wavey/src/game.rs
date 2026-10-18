@@ -192,6 +192,36 @@ impl PillGame for Game {
                                     .text("Foam intensity ×UV2"),
                             );
                         });
+
+                    egui::CollapsingHeader::new("God rays")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            color_row(ui, "Ray color", &mut water_look.god_rays_color);
+                            ui.add(
+                                egui::Slider::new(&mut water_look.god_rays_intensity, 0.0..=2.0)
+                                    .step_by(0.01)
+                                    .text("Intensity"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_look.god_rays_speed, 0.0..=0.2)
+                                    .step_by(0.0001)
+                                    .text("Travel speed"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_look.god_rays_width, 0.01..=0.4)
+                                    .step_by(0.005)
+                                    .text("Ray width"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_look.god_rays_angle, -90.0..=90.0)
+                                    .text("Angle (deg)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_look.god_rays_fade, 0.05..=1.0)
+                                    .step_by(0.01)
+                                    .text("Fade height"),
+                            );
+                        });
                 });
 
             // --- Player physics: floating panel pinned to the right edge of the window ---

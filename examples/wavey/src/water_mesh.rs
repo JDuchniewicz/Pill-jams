@@ -35,19 +35,37 @@ pub struct WaterLookParams {
     /// Multiplier applied to the second-UV value (vertical velocity) to scale how much foam
     /// the motion produces — foam is multiplied by the UV value rather than thresholded by it.
     pub foam_intensity: f32,
+    /// Colour of the god rays added on top of the shaded water.
+    pub god_rays_color: [f32; 3],
+    /// How strongly the god rays are added to the water colour.
+    pub god_rays_intensity: f32,
+    /// How fast the irregular ray offsets drift through the mesh UV space (per second).
+    pub god_rays_speed: f32,
+    /// Base width of a ray band in mesh UV space (each ray is randomly varied around it).
+    pub god_rays_width: f32,
+    /// Direction of the diagonal ray gradient in degrees (0 = vertical bands).
+    pub god_rays_angle: f32,
+    /// Mesh UV V (0 = surface, 1 = bottom) where the rays have faded out completely.
+    pub god_rays_fade: f32,
 }
 
 impl Default for WaterLookParams {
     fn default() -> Self {
         Self {
             top_color: [0.15, 0.45, 0.70],
-            bottom_color: [0.02, 0.08, 0.20],
+            bottom_color: [0.01, 0.03, 0.06],
             highlight_top: [0.55, 0.85, 0.95],
-            highlight_bottom: [0.25, 0.60, 0.80],
-            highlight_threshold: 0.95,
+            highlight_bottom: [0.11, 0.23, 0.36],
+            highlight_threshold: 0.96,
             foam_color: [0.95, 0.98, 1.0],
             foam_depth: 0.98,
             foam_intensity: 0.03,
+            god_rays_color: [1.0, 0.92, 0.75],
+            god_rays_intensity: 0.1,
+            god_rays_speed: 0.02,
+            god_rays_width: 0.15,
+            god_rays_angle: 25.0,
+            god_rays_fade: 0.7,
         }
     }
 }
@@ -84,8 +102,8 @@ struct WaterMeshPassState {
     pipeline: Pipeline,
     camera_buffer: wgpu::Buffer,
     per_draw_buffer: wgpu::Buffer,
-    /// `SurfaceParams`: count, x_min, x_max, max_depth (bit-packed u32 words), then the
-    /// second-UV debug flag and padding.
+    /// `SurfaceParams`: count, x_min, x_max, max_depth (bit-packed u32 words), and the
+    /// second-UV debug flag.
     surface_params_buffer: wgpu::Buffer,
     /// Water surface heights (world Y), uniformly spaced between x_min and x_max.
     surface_heights_buffer: wgpu::Buffer,
@@ -100,6 +118,8 @@ pub struct WaterMeshPass {
     state: Option<WaterMeshPassState>,
     per_draw_data: Vec<PerDraw>,
     draw_list: Vec<MeshHandle>,
+    /// Accumulated god-ray travel offset in mesh UV units (speed integrated over time).
+    god_ray_offset: f32,
 }
 
 impl WaterMeshPass {
@@ -108,6 +128,7 @@ impl WaterMeshPass {
             state: None,
             per_draw_data: Vec::with_capacity(MAX_WATER_MESHES),
             draw_list: Vec::with_capacity(MAX_WATER_MESHES),
+            god_ray_offset: 0.0,
         }
     }
 }
@@ -236,7 +257,7 @@ impl Pass for WaterMeshPass {
         })?;
         let look_buffer = renderer.create_buffer(BufferDesc {
             label: Some("water_mesh_pass_look"),
-            byte_size: std::mem::size_of::<[[f32; 4]; 7]>() as u64,
+            byte_size: std::mem::size_of::<[[f32; 4]; 9]>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })?;
         let frame_bind_group =
@@ -372,13 +393,15 @@ impl Pass for WaterMeshPass {
                     .clone()
             })
             .unwrap_or_default();
+        // Integrate the slider speed over time so the rays travel at a frame-rate independent rate.
+        self.god_ray_offset += look.god_rays_speed * world.delta_time / 1000.0;
         queue.write_buffer(
             &state.surface_heights_buffer,
             0,
             bytemuck::cast_slice(&heights),
         );
 
-        let look_uniform: [[f32; 4]; 7] = [
+        let look_uniform: [[f32; 4]; 9] = [
             [look.top_color[0], look.top_color[1], look.top_color[2], 1.0],
             [
                 look.bottom_color[0],
@@ -411,6 +434,18 @@ impl Pass for WaterMeshPass {
                 1.0,
             ],
             [look.foam_depth, look.foam_intensity, 0.0, 0.0],
+            [
+                look.god_rays_intensity,
+                self.god_ray_offset,
+                look.god_rays_angle.to_radians(),
+                look.god_rays_width,
+            ],
+            [
+                look.god_rays_color[0],
+                look.god_rays_color[1],
+                look.god_rays_color[2],
+                look.god_rays_fade,
+            ],
         ];
         queue.write_buffer(&state.look_buffer, 0, bytemuck::bytes_of(&look_uniform));
         let surface_params: [u32; 8] = [

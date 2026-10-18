@@ -26,6 +26,9 @@ struct WaterLook {
     float4 params;           // x = highlight threshold, y = gradient top Y, z = gradient bottom Y
     float4 foam_color;       // rgb = foam colour
     float4 foam;             // x = foam depth threshold, y = multiplier for the UV2 velocity value
+    float4 god_rays;         // x = intensity, y = accumulated travel offset, z = angle (radians),
+                             // w = base width
+    float4 god_rays_color;   // rgb = ray colour, a = mesh UV V where the rays reach zero
 };
 [[vk::binding(4, 0)]] ConstantBuffer<WaterLook> water_look;
 
@@ -84,6 +87,37 @@ float4 fs_main(FragmentInput input) : SV_Target {
     foam_amount = smoothstep(0.0, 1.0, foam_amount);
     float foam = foam_band * foam_amount;
     color = lerp(color, water_look.foam_color.rgb, foam);
+
+    // God rays: seven irregular gradient shafts in the water mesh's UV space. Every ray has a
+    // stable pseudo-random offset and width, and the accumulated offset (god_rays.y) drifts with
+    // time so the shafts slowly travel through the mesh. The added value is lerped to zero towards
+    // the bottom of the mesh using the first UV set (god_rays_color.a).
+    float2 ray_axis = float2(cos(water_look.god_rays.z), sin(water_look.god_rays.z));
+    float ray_span = max(abs(ray_axis.x) + abs(ray_axis.y), 0.0001);
+    float ray_coord = dot(input.uv, ray_axis) / ray_span;
+    float rays = 0.0;
+    [unroll]
+    for (int i = 0; i < 7; ++i) {
+        float fi = float(i);
+        float offset_jitter = frac(sin(fi * 12.9898 + 4.1414) * 43758.5453);
+        float width_jitter = frac(sin(fi * 78.233 + 1.2345) * 43758.5453);
+        float speed_jitter = frac(sin(fi * 39.346 + 7.1234) * 43758.5453);
+
+        // One ray per slot, jittered inside it so the spacing between rays is irregular.
+        float center = (fi + offset_jitter) / 7.0;
+        center += water_look.god_rays.y * (0.5 + speed_jitter);
+        center = frac(center);
+
+        // Random shaft width around the slider value.
+        float half_width = 0.5 * water_look.god_rays.w * (0.5 + width_jitter);
+        float distance_to_ray = abs(ray_coord - center);
+        distance_to_ray = min(distance_to_ray, 1.0 - distance_to_ray);
+        rays += 1.0 - smoothstep(0.0, max(half_width, 0.0001), distance_to_ray);
+    }
+    rays = saturate(rays);
+
+    float vertical_fade = 1.0 - saturate(input.uv.y / max(water_look.god_rays_color.a, 0.0001));
+    color += water_look.god_rays_color.rgb * (rays * water_look.god_rays.x * vertical_fade);
 
     return float4(color, 1.0);
 }
