@@ -55,7 +55,7 @@ impl Default for SkyParams {
             sun_position: [0.72, 0.28],
             sun_radius: 0.18,
             sun_softness: 0.55,
-            horizon: 0.5,
+            horizon: 0.64,
             horizon_softness: 0.027,
             wave_amplitude: 0.005,
             wave_frequency: 13.0,

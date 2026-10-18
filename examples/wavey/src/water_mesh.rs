@@ -27,6 +27,10 @@ pub struct WaterLookParams {
     pub highlight_bottom: [f32; 3],
     /// The overlay is applied where the (inverted) depth value is above this threshold.
     pub highlight_threshold: f32,
+    /// Vertical offset (world units) applied to both ends of the water colour gradient.
+    pub water_gradient_offset: f32,
+    /// Contrast of the colour transition: >1 steepens it around the middle, <1 softens it.
+    pub water_gradient_contrast: f32,
     /// Foam colour, blended on top inside the foam band, weighted by the second UV set.
     pub foam_color: [f32; 3],
     /// Lower bound of the (inverted) depth band where foam appears: higher values are nearer the
@@ -57,6 +61,8 @@ impl Default for WaterLookParams {
             highlight_top: [0.55, 0.85, 0.95],
             highlight_bottom: [0.11, 0.23, 0.36],
             highlight_threshold: 0.96,
+            water_gradient_offset: 5.0,
+            water_gradient_contrast: 2.0,
             foam_color: [0.95, 0.98, 1.0],
             foam_depth: 0.98,
             foam_intensity: 0.03,
@@ -257,7 +263,7 @@ impl Pass for WaterMeshPass {
         })?;
         let look_buffer = renderer.create_buffer(BufferDesc {
             label: Some("water_mesh_pass_look"),
-            byte_size: std::mem::size_of::<[[f32; 4]; 9]>() as u64,
+            byte_size: std::mem::size_of::<[[f32; 4]; 10]>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })?;
         let frame_bind_group =
@@ -401,7 +407,7 @@ impl Pass for WaterMeshPass {
             bytemuck::cast_slice(&heights),
         );
 
-        let look_uniform: [[f32; 4]; 9] = [
+        let look_uniform: [[f32; 4]; 10] = [
             [look.top_color[0], look.top_color[1], look.top_color[2], 1.0],
             [
                 look.bottom_color[0],
@@ -445,6 +451,12 @@ impl Pass for WaterMeshPass {
                 look.god_rays_color[1],
                 look.god_rays_color[2],
                 look.god_rays_fade,
+            ],
+            [
+                look.water_gradient_offset,
+                look.water_gradient_contrast,
+                0.0,
+                0.0,
             ],
         ];
         queue.write_buffer(&state.look_buffer, 0, bytemuck::bytes_of(&look_uniform));

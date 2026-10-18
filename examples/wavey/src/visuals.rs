@@ -38,7 +38,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .build_entity(active_scene)
         .with_component(
             TransformComponent::builder()
-                .position(Vector3f::new(0.0, 0.0, -30.0))
+                .position(Vector3f::new(0.0, 30.0, -30.0))
                 .rotation(Vector3f::new(0.0, 180.0, 0.0))
                 .build(),
         )

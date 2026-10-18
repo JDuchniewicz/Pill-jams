@@ -108,12 +108,12 @@ impl Default for PostProcessParams {
             vignette_softness: 0.55,
             vignette_radius: 0.82,
             dither_strength: 1.0,
-            dither_levels: 5,
-            dither_scale: 1.5,
+            dither_levels: 50,
+            dither_scale: 1.3,
             dither_pattern: DitherPattern::Halftone,
             dither_angle: 45.0,
             dither_width: 1.0,
-            dither_softness: 0.0,
+            dither_softness: 1.0,
         }
     }
 }

@@ -177,6 +177,21 @@ impl PillGame for Game {
                             color_row(ui, "Overlay top", &mut water_look.highlight_top);
                             color_row(ui, "Overlay bottom", &mut water_look.highlight_bottom);
                             ui.add(
+                                egui::Slider::new(
+                                    &mut water_look.water_gradient_offset,
+                                    -100.0..=100.0,
+                                )
+                                .text("Gradient position"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_look.water_gradient_contrast,
+                                    0.1..=10.0,
+                                )
+                                .logarithmic(true)
+                                .text("Gradient contrast"),
+                            );
+                            ui.add(
                                 egui::Slider::new(&mut water_look.highlight_threshold, 0.0..=1.0)
                                     .text("Overlay threshold"),
                             );

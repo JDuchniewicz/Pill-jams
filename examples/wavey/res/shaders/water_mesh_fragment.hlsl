@@ -29,6 +29,7 @@ struct WaterLook {
     float4 god_rays;         // x = intensity, y = accumulated travel offset, z = angle (radians),
                              // w = base width
     float4 god_rays_color;   // rgb = ray colour, a = mesh UV V where the rays reach zero
+    float4 gradient;         // x = vertical offset, y = contrast of the colour transition
 };
 [[vk::binding(4, 0)]] ConstantBuffer<WaterLook> water_look;
 
@@ -70,9 +71,13 @@ float4 fs_main(FragmentInput input) : SV_Target {
     float depth = saturate((surface_y - input.world_y) / max(surface_params.max_depth, 0.00001));
     float height = 1.0 - depth;
 
-    // World-space vertical gradient
-    float gradient_span = max(water_look.params.y - water_look.params.z, 0.00001);
-    float gradient_t = saturate((input.world_y - water_look.params.z) / gradient_span);
+    // World-space vertical gradient, shifted vertically by `gradient.x`
+    float gradient_top = water_look.params.y + water_look.gradient.x;
+    float gradient_bottom = water_look.params.z + water_look.gradient.x;
+    float gradient_span = max(gradient_top - gradient_bottom, 0.00001);
+    float gradient_t = saturate((input.world_y - gradient_bottom) / gradient_span);
+    // Contrast pivots around the middle of the gradient: >1 steepens the transition, <1 softens it.
+    gradient_t = saturate((gradient_t - 0.5) * water_look.gradient.y + 0.5);
     float3 base = lerp(water_look.bottom_color.rgb, water_look.top_color.rgb, gradient_t);
 
     // Light overlay gradient in the areas above the threshold (near the surface)
