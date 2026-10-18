@@ -801,16 +801,26 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 }
 
                 if next_dive_hold_time[player_index] > 0.0 {
-                    body.add_force(
-                        Vector3f::new(
-                            0.0,
-                            -params.thrust_down_force * DIVE_BURST_THRUST_MULTIPLIER,
-                            0.0,
-                        ),
-                        true,
-                    );
-                    next_dive_hold_time[player_index] =
-                        (next_dive_hold_time[player_index] - delta_time).max(0.0);
+                    let just_released = next_dive_was_held[player_index];
+                    let still_descending = body.linvel().y < 0.0;
+
+                    if just_released || still_descending {
+                        body.add_force(
+                            Vector3f::new(
+                                0.0,
+                                -params.thrust_down_force * DIVE_BURST_THRUST_MULTIPLIER,
+                                0.0,
+                            ),
+                            true,
+                        );
+                        next_dive_hold_time[player_index] =
+                            (next_dive_hold_time[player_index] - delta_time).max(0.0);
+                    } else {
+                        // Lowest point reached: stop pushing down so buoyancy takes
+                        // over and lifts the boat back up instead of holding it in
+                        // place underwater.
+                        next_dive_hold_time[player_index] = 0.0;
+                    }
                 }
             }
             next_dive_was_held[player_index] = diving;
