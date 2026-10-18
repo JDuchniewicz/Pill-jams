@@ -308,6 +308,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
 #[derive(Clone, Copy, Default)]
 struct ShipControls {
     movement_x: f32,
+    movement_y: f32,
     drop_bomb: bool,
     horn_blare: bool,
 }
@@ -316,6 +317,8 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
     let input = engine.get_global_component::<InputComponent>()?;
     let keyboard_x =
         (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
+    let keyboard_y =
+        (input.get_key(KeyboardKey::KeyS) as i32 - input.get_key(KeyboardKey::KeyW) as i32) as f32;
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
     let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
@@ -325,6 +328,8 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
             // Keyboard is reserved for Player 1, not both ships.
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
+            movement_y: input.get_gamepad_axis(id, GamepadAxis::LeftStickY)
+                + if i == 0 { keyboard_y } else { 0.0 },
             drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::A)
                 || (i == 0 && keyboard_bomb),
             horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
@@ -385,10 +390,12 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         if let Some(handle) = rb.get_rigid_body_handle() {
             let player_index = player.id as usize;
             let input_x = controls[player_index].movement_x;
+            let input_y = controls[player_index].movement_y;
             ships.push((
                 handle,
                 player_index,
                 input_x,
+                input_y,
                 player.air_time,
                 player.last_thrust_direction,
             ));
@@ -405,7 +412,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     {
         let physics = engine.get_global_component::<PhysicsWorldComponent>()?;
 
-        for (handle, player_index, input_x, air_time, last_thrust_direction) in ships {
+        for (handle, player_index, input_x, input_y, air_time, last_thrust_direction) in ships {
             // Preserve the previous state if this body is missing from the physics world.
             next_air_time[player_index] = air_time;
             next_thrust_direction[player_index] = last_thrust_direction;
@@ -418,6 +425,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 handle,
                 player_index,
                 input_x,
+                input_y,
                 air_time,
                 last_thrust_direction,
                 body.translation(),
@@ -432,6 +440,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         handle,
         player_index,
         input_x,
+        input_y,
         air_time,
         last_thrust_direction,
         player_position,
@@ -469,6 +478,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             handle,
             player_index,
             input_x,
+            input_y,
             air_time,
             last_thrust_direction,
             point_buoyancy_forces,
@@ -487,6 +497,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             handle,
             player_index,
             input_x,
+            input_y,
             mut air_time,
             mut last_thrust_direction,
             point_buoyancy_forces,
@@ -563,9 +574,9 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
 
             // In water: full thrust along X. Remember the direction that was applied.
-            if input_x.abs() > params.input_deadzone && in_water {
-                last_thrust_direction = Vector3f::new(-input_x, 0.0, 0.0).normalize_or_zero();
-                body.add_force(last_thrust_direction * params.thrust_force, true);
+            let direction_vector = Vector3f::new(-input_x, -input_y, 0.0).normalize_or_zero();
+            if (input_x.abs() > params.input_deadzone || input_y.abs() > params.input_deadzone) && in_water {
+                body.add_force(direction_vector * params.thrust_force, true);
             }
 
             // Airborne: no thrust, just coasting. Drag ramps with the time spent in
