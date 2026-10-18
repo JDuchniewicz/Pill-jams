@@ -46,8 +46,8 @@ impl Default for WaterLookParams {
             highlight_bottom: [0.25, 0.60, 0.80],
             highlight_threshold: 0.95,
             foam_color: [0.95, 0.98, 1.0],
-            foam_depth: 0.93,
-            foam_intensity: 2.0,
+            foam_depth: 0.96,
+            foam_intensity: 0.05,
         }
     }
 }

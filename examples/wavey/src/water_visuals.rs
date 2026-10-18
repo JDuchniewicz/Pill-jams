@@ -79,7 +79,7 @@ fn water_rows(water_points: &[WaterPoint]) -> (Vec<Vector2f>, Vec<Vector2f>, Vec
         top.push(Vector2f::new(x, point.y));
         // Flat bottom: every bottom vertex sits on the same horizontal line
         bottom.push(Vector2f::new(x, WATER_BOTTOM_Y));
-        uv2.push([point.horizontal_velocity_delta, 0.0]);
+        uv2.push([point.velocity, 0.0]);
     }
 
     (top, bottom, uv2)

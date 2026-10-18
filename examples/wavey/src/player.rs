@@ -4,6 +4,7 @@ use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 const BUOYANCY_STRENGTH: f32 = 100.0;
 const SHIP_MASS: f32 = 10.0;
+const WAVE_SLOPE_STRENGTH: f32 = 100.0;
 define_component!(PlayerComponent { id: PlayerId });
 
 // TODO: for now we are playing locally -> maybe also play over network
@@ -31,6 +32,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(
             TransformComponent::builder()
                 .position(Vector3f::new(-1.0, 0.0, 0.0))
+                .rotation(Vector3f::new(0.0, 180.0, 0.0))
                 .build(),
         )
         .with_component(
@@ -58,7 +60,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(SharedShape::cuboid(0.5, 0.8, 0.5))
+                .shape(SharedShape::cuboid(1.0, 0.25, 0.3))
                 .friction(0.4)
                 .restitution(0.0)
                 .mass(SHIP_MASS)
@@ -69,16 +71,59 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         })
         .build();
 
+    // Player 2 is a camera-facing sprite; the transform drives its world position.
+    engine
+        .build_entity(active_scene)
+        .with_component(
+            TransformComponent::builder()
+                .position(Vector3f::new(-20.0, 0.0, 0.0))
+                .build(),
+        )
+        .with_component(
+            SpriteRenderingComponent::builder()
+                .texture(&ship_texture_handle)
+                .size(Vector2f::new(20.0, 20.0))
+                // 2D game objects stay visible over the water and the other player
+                .depth_test(false)
+                // Hull below the water surface is drawn at half brightness
+                .submerge(0.5, 0.0)
+                .build(),
+        )
+        .with_component(
+            RigidBodyComponent::builder()
+                .body_type(RigidBodyType::Dynamic)
+                .linear_damping(5.0)
+                .angular_damping(3.0)
+                .locked_axes(
+                    LockedAxes::TRANSLATION_LOCKED_Z
+                        | LockedAxes::ROTATION_LOCKED_X
+                        | LockedAxes::ROTATION_LOCKED_Y,
+                )
+                .ccd_enabled(true)
+                .build(),
+        )
+        .with_component(
+            ColliderComponent::builder()
+                .shape(SharedShape::cuboid(1.0, 0.25, 0.3))
+                .friction(0.4)
+                .restitution(0.0)
+                .mass(SHIP_MASS)
+                .build(),
+        )
+        .with_component(PlayerComponent {
+            id: PlayerId::Player2,
+        })
+        .build();
+
     Ok(())
 }
 
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
     const HULL_POINTS: [Vector3f; 3] = [
-        Vector3f::new(-0.8, -0.4, 0.0), // Left
-        Vector3f::new(0.0, -0.5, 0.0),  // Center
-        Vector3f::new(0.8, -0.4, 0.0),  // Right
+        Vector3f::new(-0.8, -0.22, 0.0),
+        Vector3f::new(0.0, -0.25, 0.0),
+        Vector3f::new(0.8, -0.22, 0.0),
     ];
-
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
     let (movements, drop_bombs) = {
@@ -132,26 +177,35 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     // Compute buoyancy from the current water height
     let mut ship_forces = Vec::with_capacity(ship_states.len());
     for (handle, input_x, player_position, player_rotation) in ship_states {
+        // store water samples at points
+        let mut water_samples = [(0.0f32, 0.0f32); 3];
         // calculate the force triplet
         let mut point_buoyancy_forces = Vec::with_capacity(3);
-        for local_point in HULL_POINTS {
+        for (i, local_point) in HULL_POINTS.iter().enumerate() {
             let world_point = player_position + player_rotation * local_point;
-            let water_height = water_height_at_x(engine, world_point.x)?;
+            water_samples[i] = (world_point.x, water_height_at_x(engine, world_point.x)?);
 
-            let point_buoyancy_force = if world_point.y < water_height {
-                let depth = water_height - world_point.y;
+            let point_buoyancy_force = if world_point.y < water_samples[i].1 {
+                let depth = water_samples[i].1 - world_point.y;
                 Vector3f::new(0.0, depth * BUOYANCY_STRENGTH, 0.0)
             } else {
                 Vector3f::new(0.0, 0.0, 0.0)
             };
             point_buoyancy_forces.push((world_point, point_buoyancy_force));
         }
-        ship_forces.push((handle, input_x, point_buoyancy_forces));
+
+        let dx = water_samples[2].0 - water_samples[0].0;
+        let slope = if dx.abs() > 0.001 {
+            (water_samples[2].1 - water_samples[0].1) / dx
+        } else {
+            0.0
+        };
+        ship_forces.push((handle, input_x, point_buoyancy_forces, slope));
     }
     // Apply thrust and buoyancy to Rapier's bodies
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-    for (handle, input_x, point_buoyancy_forces) in ship_forces {
+    for (handle, input_x, point_buoyancy_forces, slope) in ship_forces {
         let Some(body) = physics.rigid_body_set.get_mut(handle) else {
             continue;
         };
@@ -164,12 +218,23 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             body.add_force(Vector3f::new(-input_x * THRUST_FORCE, 0.0, 0.0), true);
         }
 
+        let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
+
         // Buoyancy pushes up while the player is below the water surface
         for (world_point, buoyancy_force) in point_buoyancy_forces {
             if buoyancy_force.y != 0.0 {
                 body.add_force_at_point(buoyancy_force, world_point, true);
             }
         }
+
+        // Add the force of going up or down the slope
+        if in_water {
+            body.add_force(
+                Vector3f::new(-slope.clamp(-1.0, 1.0) * WAVE_SLOPE_STRENGTH, 0.0, 0.0),
+                true,
+            );
+        }
+
         //constant downward force due to ship weight
         body.add_force(
             Vector3f::new(0.0, -SHIP_MASS * BUOYANCY_STRENGTH, 0.0),
