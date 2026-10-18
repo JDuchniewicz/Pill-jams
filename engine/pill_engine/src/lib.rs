@@ -91,7 +91,7 @@ pub mod game {
     #[cfg(not(target_arch = "wasm32"))]
     pub use crate::{
         ecs::{AudioListenerComponent, AudioManagerComponent, AudioSourceComponent, SoundType},
-        resources::Sound,
+        resources::{Sound, SoundHandle},
     };
 
     #[cfg(feature = "physics")]

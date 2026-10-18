@@ -1,5 +1,7 @@
 use pill_engine::{define_component, define_global_component, game::*};
 
+use crate::sounds::schedule_audio;
+use crate::sounds::SingleShotAudioComponent;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 
@@ -163,7 +165,7 @@ fn ship_hull_shape(params: &PlayerPhysicsParams) -> SharedShape {
     ])
 }
 
-pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
+pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<EntityHandle>> {
     engine.register_component::<RigidBodyComponent>(active_scene)?;
     engine.register_component::<ColliderComponent>(active_scene)?;
     engine.register_component::<PlayerComponent>(active_scene)?;
@@ -187,7 +189,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         ResourceLoader::Path("textures/ship_test.png".into()),
     ))?;
 
-    engine
+    let player1 = engine
         .build_entity(active_scene)
         .with_component(
             TransformComponent::builder()
@@ -230,10 +232,17 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
         })
+        .with_component(
+            AudioSourceComponent::builder()
+                .sound_type(SoundType::Sound2D)
+                .volume(0.25)
+                .play_on_awake(false)
+                .build(),
+        )
         .build();
 
     // Player 2 is a camera-facing sprite; the transform drives its world position.
-    engine
+    let player2 = engine
         .build_entity(active_scene)
         .with_component(
             TransformComponent::builder()
@@ -276,6 +285,13 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
         })
+        .with_component(
+            AudioSourceComponent::builder()
+                .sound_type(SoundType::Sound2D)
+                .volume(0.25)
+                .play_on_awake(false)
+                .build(),
+        )
         .build();
 
     engine
@@ -286,13 +302,14 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
             0.0,
         ));
 
-    Ok(())
+    Ok(Vec::from([player1, player2]))
 }
 
 #[derive(Clone, Copy, Default)]
 struct ShipControls {
     movement_x: f32,
     drop_bomb: bool,
+    horn_blare: bool,
 }
 
 fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as usize]> {
@@ -300,6 +317,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
     let keyboard_x =
         (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
+    let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
     Ok(std::array::from_fn(|i| {
         let id = PlayerId::try_from(i as u8).unwrap();
@@ -309,6 +327,8 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
                 + if i == 0 { keyboard_x } else { 0.0 },
             drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::A)
                 || (i == 0 && keyboard_bomb),
+            horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
+                || (i == 0 && keyboard_blare),
         }
     }))
 }
@@ -625,8 +645,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
-    for (_, transform_component, player_component) in
-        engine.iterate_two_components_mut::<TransformComponent, PlayerComponent>()?
+    for (_, transform_component, player_component, single_shot_audio) in
+        engine.iterate_three_components_mut::<TransformComponent, PlayerComponent, SingleShotAudioComponent>()?
     {
         let player_index = player_component.id as usize;
         player_component.air_time = next_air_time[player_index];
@@ -638,6 +658,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 transform_component.position.x,
                 transform_component.position.y,
             ));
+        }
+
+        if controls[player_component.id as usize].horn_blare {
+            schedule_audio(single_shot_audio)?;
         }
     }
 
