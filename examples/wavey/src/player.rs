@@ -20,10 +20,29 @@ const METERS_PER_WORLD_UNIT: f32 = 0.20;
 const GRAVITY_MPS2: f32 = -9.81;
 const BUOYANCY_STRENGTH: f32 = 100.0 / METERS_PER_WORLD_UNIT;
 
+// Pixel coordinates of the actual white hull on the 374x374 ship_test.png.
+// The sprite continues to render at 20x20 world units, unchanged.
+const SHIP_ART_SIZE: f32 = 374.0;
+const SHIP_SPRITE_SIZE: f32 = 20.0;
+const HULL_ART_HALF_WIDTH: f32 = (345.0 - 33.0) * SHIP_SPRITE_SIZE / (2.0 * SHIP_ART_SIZE);
+const HULL_ART_HALF_HEIGHT: f32 = (169.0 - 111.0) * SHIP_SPRITE_SIZE / (2.0 * SHIP_ART_SIZE);
+const DECK_LOCAL_Y: f32 = (0.5 - 111.0 / SHIP_ART_SIZE) * SHIP_SPRITE_SIZE;
+
+// Widen the contact region slightly beyond the white hull for forgiving impacts.
+// SpriteRenderer still draws the ORIGINAL 20x20 texture; these affect physics only.
+const HULL_CONTACT_MARGIN_X: f32 = 1.08;
+const HULL_CONTACT_MARGIN_Y: f32 = 1.18;
+
+// Keep the total mass at `ship_mass`, but concentrate most of it near the ship
+// origin (below the painted hull), rather than the centroid of the raised shape.
+// This is physical ballast, not a fake restoring torque.
+const HULL_GEOMETRY_MASS_FRACTION: f32 = 0.15;
+
 /// Every tunable of the ship physics, live-edited from the "Player physics" egui window.
 #[derive(Clone, Debug)]
 pub struct PlayerPhysicsParams {
-    /// Hull collision box half extents (local space).
+    /// Trapezoidal hull half-extents, in sprite-local world units.
+    /// The deck stays aligned with the original sprite as hull height changes.
     pub hull_half_width: f32,
     pub hull_half_height: f32,
     pub hull_half_depth: f32,
@@ -46,22 +65,23 @@ pub struct PlayerPhysicsParams {
     pub wave_slope_strength: f32,
     /// The water slope is clamped to ±this before it becomes a force.
     pub slope_clamp: f32,
-    /// Hull sample points (local space): outer X/Y and the centre point's Y.
+    /// Outer sample X as a fraction of the physical hull half-width (0..1).
     pub hull_sample_x: f32,
+    /// Local height ABOVE the hull's physical bottom for the outer/center samples.
     pub hull_sample_y: f32,
     pub hull_center_y: f32,
     //Drag coefficients for the water
     //Linear drag force
     pub water_drag_linear: f32, // F = c1*v
     //Quadratic drag force
-    pub water_drag_quadratic: f32 // F = c2*v^2
+    pub water_drag_quadratic: f32, // F = c2*v^2
 }
 
 impl Default for PlayerPhysicsParams {
     fn default() -> Self {
         Self {
-            hull_half_width: 1.0,
-            hull_half_height: 0.25,
+            hull_half_width: HULL_ART_HALF_WIDTH * HULL_CONTACT_MARGIN_X,
+            hull_half_height: HULL_ART_HALF_HEIGHT * HULL_CONTACT_MARGIN_Y,
             hull_half_depth: 0.3,
             ship_mass: 10.0,
             friction: 0.4,
@@ -80,9 +100,61 @@ impl Default for PlayerPhysicsParams {
             hull_center_y: 0.25,
             water_drag_linear: 10.0,
             water_drag_quadratic: 10.0,
-
         }
     }
+}
+
+/// Two 3D convex prisms: the painted trapezoidal hull and the wheelhouse.
+/// Coordinates are in LOCAL 20x20 sprite space, not pixel space.
+/// Shape is slightly larger than the white art for robust contact handling.
+fn ship_hull_shape(params: &PlayerPhysicsParams) -> SharedShape {
+    let world_x = |px: f32| {
+        (px / SHIP_ART_SIZE - 0.5)
+            * SHIP_SPRITE_SIZE
+            * (params.hull_half_width / HULL_ART_HALF_WIDTH)
+    };
+    let world_y = |py: f32| (0.5 - py / SHIP_ART_SIZE) * SHIP_SPRITE_SIZE;
+
+    let deck_y = DECK_LOCAL_Y;
+    let bottom_y = deck_y - 2.0 * params.hull_half_height;
+    let depth = params.hull_half_depth;
+
+    // Hull: (33,111)-(345,111)-(326,169)-(67,169) in the original PNG.
+    // Its top stays on the sprite deck; the enlarged thickness goes downwards.
+    let hull_outline = [
+        (world_x(33.0), deck_y),
+        (world_x(345.0), deck_y),
+        (world_x(326.0), bottom_y),
+        (world_x(67.0), bottom_y),
+    ];
+    let mut hull_vertices = Vec::with_capacity(8);
+    for z in [-depth, depth] {
+        for (x, y) in hull_outline {
+            hull_vertices.push(Vector3f::new(x, y, z));
+        }
+    }
+    let hull = SharedShape::convex_hull(&hull_vertices).expect("valid ship hull");
+
+    // Wheelhouse: separate from the deck, so there is no artificial solid wall
+    // connecting its roof to the hull. Also gives the cabin real collisions.
+    let cabin_outline = [
+        (world_x(268.0), world_y(40.0)),
+        (world_x(342.0), world_y(40.0)),
+        (world_x(342.0), world_y(91.0)),
+        (world_x(268.0), world_y(91.0)),
+    ];
+    let mut cabin_vertices = Vec::with_capacity(8);
+    for z in [-depth, depth] {
+        for (x, y) in cabin_outline {
+            cabin_vertices.push(Vector3f::new(x, y, z));
+        }
+    }
+    let cabin = SharedShape::convex_hull(&cabin_vertices).expect("valid ship cabin");
+
+    SharedShape::compound(vec![
+        (Default::default(), hull),
+        (Default::default(), cabin),
+    ])
 }
 
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
@@ -143,14 +215,10 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(SharedShape::cuboid(
-                    physics.hull_half_width,
-                    physics.hull_half_height,
-                    physics.hull_half_depth,
-                ))
+                .shape(ship_hull_shape(&physics))
                 .friction(physics.friction)
                 .restitution(physics.restitution)
-                .mass(physics.ship_mass)
+                .mass(physics.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
                 .build(),
         )
         .with_component(PlayerComponent {
@@ -191,14 +259,10 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(SharedShape::cuboid(
-                    physics.hull_half_width,
-                    physics.hull_half_height,
-                    physics.hull_half_depth,
-                ))
+                .shape(ship_hull_shape(&physics))
                 .friction(physics.friction)
                 .restitution(physics.restitution)
-                .mass(physics.ship_mass)
+                .mass(physics.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
                 .build(),
         )
         .with_component(PlayerComponent {
@@ -230,15 +294,18 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         guard.clone()
     };
 
-    // Hull sample points are derived from the tunables (outer X/Y and the centre point's Y).
+    // Use actual lower hull positions, not the old tiny samples around (0,-0.2).
+    // Wide spacing provides restoring torque when one side dips into a wave.
+    let sample_x = params.hull_half_width * params.hull_sample_x.clamp(0.0, 0.95);
+    let hull_bottom_y = DECK_LOCAL_Y - 2.0 * params.hull_half_height;
     let hull_points: [Vector3f; 3] = [
-        Vector3f::new(-params.hull_sample_x, -params.hull_sample_y, 0.0),
-        Vector3f::new(0.0, -params.hull_center_y, 0.0),
-        Vector3f::new(params.hull_sample_x, -params.hull_sample_y, 0.0),
+        Vector3f::new(-sample_x, hull_bottom_y + params.hull_sample_y, 0.0),
+        Vector3f::new(0.0, hull_bottom_y + params.hull_center_y, 0.0),
+        Vector3f::new(sample_x, hull_bottom_y + params.hull_sample_y, 0.0),
     ];
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
-    let (movements, keyboard_movements,drop_bombs) = {
+    let (movements, keyboard_movements, drop_bombs) = {
         let input = engine.get_global_component::<InputComponent>()?;
 
         // movements
@@ -278,7 +345,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         engine.iterate_two_components_mut::<RigidBodyComponent, PlayerComponent>()?
     {
         if let Some(handle) = rb.get_rigid_body_handle() {
-            let input_x = movements[player.id as usize].0 + keyboard_movements[player.id as usize].0;
+            let input_x =
+                movements[player.id as usize].0 + keyboard_movements[player.id as usize].0;
             ships.push((handle, input_x));
         }
     }
@@ -311,7 +379,11 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             let point_buoyancy_force = if world_point.y < water_samples[i].1 {
                 let depth = water_samples[i].1 - world_point.y;
-                Vector3f::new(0.0, depth * params.buoyancy_strength/hull_points.len() as f32, 0.0)
+                Vector3f::new(
+                    0.0,
+                    depth * params.buoyancy_strength / hull_points.len() as f32,
+                    0.0,
+                )
             } else {
                 Vector3f::new(0.0, 0.0, 0.0)
             };
@@ -326,7 +398,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         };
         ship_forces.push((handle, input_x, point_buoyancy_forces, slope));
     }
-    // Apply thrust and buoyancy to Rapier's bodies
+    // Apply thrust and buoyancy to Rapier's bodies.
+    // Construct the expected compound collider once, not every frame per ship.
+    let expected_hull_shape = ship_hull_shape(&params);
+    let expected_aabb = expected_hull_shape.compute_local_aabb();
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
     for (handle, input_x, point_buoyancy_forces, slope) in ship_forces {
@@ -334,11 +409,19 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             continue;
         };
 
-        // Live tuning: push changed values into the Rapier body (only when they differ, so the
-        // body is not woken up every frame).
-        //if (body.linear_damping() - params.linear_damping).abs() > 1.0e-6 {
-        //    body.set_linear_damping(params.linear_damping);
-        //}
+        // Keep the *total* mass at params.ship_mass: only 15% lives in the
+        // collision geometry high above the origin. The rest is ballast at
+        // body origin, below the hull. Rapier handles the resulting COM.
+        // Build MASS PROPERTIES at the body's local origin, NOT just an
+        // "additional mass" value. `set_additional_mass()` alone would keep
+        // the COM at the hull's raised centroid (and still cause capsizing).
+        // This low, wide ballast has inertia but no extra collision geometry.
+        let mut ballast_props =
+            SharedShape::cuboid(params.hull_half_width * 0.7, 0.15, params.hull_half_depth)
+                .mass_properties(1.0);
+        ballast_props.set_mass(params.ship_mass * (1.0 - HULL_GEOMETRY_MASS_FRACTION), true);
+        body.set_additional_mass_properties(ballast_props, true);
+
         if (body.angular_damping() - params.angular_damping).abs() > 1.0e-6 {
             body.set_angular_damping(params.angular_damping);
         }
@@ -349,27 +432,22 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             body.enable_ccd(params.ccd_enabled);
         }
 
-        // Same for the hull colliders: shape, surface properties and mass.
+        // Update only the ship's compound collider. Compare local AABB bounds,
+        // not the rotated world AABB, so rocking never triggers a rebuild.
         let collider_handles = body.colliders().to_vec();
         for collider_handle in collider_handles {
             let Some(collider) = physics.collider_set.get_mut(collider_handle) else {
                 continue;
             };
 
-            let shape_changed = match collider.shape().as_cuboid() {
-                Some(cuboid) => {
-                    (cuboid.half_extents.x - params.hull_half_width).abs() > 1.0e-6
-                        || (cuboid.half_extents.y - params.hull_half_height).abs() > 1.0e-6
-                        || (cuboid.half_extents.z - params.hull_half_depth).abs() > 1.0e-6
-                }
-                None => true,
-            };
+            let aabb = collider.shape().compute_local_aabb();
+            let eps = 1.0e-4;
+            let shape_changed = collider.shape().as_compound().is_none()
+                || (aabb.mins - expected_aabb.mins).length() > eps
+                || (aabb.maxs - expected_aabb.maxs).length() > eps;
+
             if shape_changed {
-                collider.set_shape(SharedShape::cuboid(
-                    params.hull_half_width,
-                    params.hull_half_height,
-                    params.hull_half_depth,
-                ));
+                collider.set_shape(expected_hull_shape.clone());
             }
             if (collider.friction() - params.friction).abs() > 1.0e-6 {
                 collider.set_friction(params.friction);
@@ -377,29 +455,33 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             if (collider.restitution() - params.restitution).abs() > 1.0e-6 {
                 collider.set_restitution(params.restitution);
             }
-            if (collider.mass() - params.ship_mass).abs() > 1.0e-6 {
-                collider.set_mass(params.ship_mass);
+            let hull_mass = params.ship_mass * HULL_GEOMETRY_MASS_FRACTION;
+            if (collider.mass() - hull_mass).abs() > 1.0e-6 {
+                collider.set_mass(hull_mass);
             }
         }
+
+        // Make ballast / collider mass-property changes effective *before* the
+        // buoyancy forces are applied at world points in this update.
+        body.recompute_mass_properties_from_colliders(&physics.collider_set);
 
         body.reset_forces(true);
         body.reset_torques(true);
 
         let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
         // Apply thrust along X
-        if input_x.abs() > params.input_deadzone  && in_water{
+        if input_x.abs() > params.input_deadzone && in_water {
             body.add_force(
                 Vector3f::new(-input_x * params.thrust_force, 0.0, 0.0),
                 true,
             );
         }
 
-
         let submerged_points = point_buoyancy_forces
             .iter()
-            .filter(|(_, force)|force.y > 0.0)
+            .filter(|(_, force)| force.y > 0.0)
             .count();
-        let submersion = submerged_points as f32/point_buoyancy_forces.len() as f32;
+        let submersion = submerged_points as f32 / point_buoyancy_forces.len() as f32;
         // Buoyancy pushes up while the player is below the water surface
         for (world_point, buoyancy_force) in point_buoyancy_forces {
             if buoyancy_force.y != 0.0 {
@@ -407,11 +489,12 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             }
         }
         //Water drag: apply a linear+quadratic drag force based on the velocity of the ship in water
-        if submersion>0.0{
+        if submersion > 0.0 {
             let velocity = body.linvel();
             let speed = velocity.length();
-            if  speed > 0.0 {
-                let drag_coefficient = params.water_drag_linear + params.water_drag_quadratic * speed;
+            if speed > 0.0 {
+                let drag_coefficient =
+                    params.water_drag_linear + params.water_drag_quadratic * speed;
                 let drag_force = velocity * -drag_coefficient * submersion;
                 body.add_force(drag_force, true);
             }
