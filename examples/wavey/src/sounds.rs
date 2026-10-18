@@ -1,7 +1,7 @@
+use crate::player::PlayerComponent;
 use pill_engine::{define_component, game::*};
 
 // TODO:LIST
-// audio music
 // collision in ass and rumble
 // containers?
 
@@ -46,7 +46,7 @@ pub fn start(
     let ambient_2_duration_ms = ambient_2.duration().unwrap().as_secs_f32();
     let ambient_2_handle = engine.add_resource(ambient_2)?;
     let mut ambient_3 = Sound::new("ambient_3", "audio/spanish.mp3".into());
-    ambient_3.initialize(engine)?;
+    ambient_3.initialize(engine)?; // TODO: hackssss
     let ambient_3_duration_ms = ambient_3.duration().unwrap().as_secs_f32();
     let ambient_3_handle = engine.add_resource(ambient_3)?;
 
@@ -59,7 +59,7 @@ pub fn start(
                 timeout: BLARE_LENGTH,
                 elapsed: 0.0,
                 tracks: Vec::from([blare_1_handle, blare_2_handle, blare_3_handle]),
-                chosen_track: 0,
+                chosen_track: rand::random_range(0..3), // TODO: shoudl be settable later
             },
         )?;
     }
@@ -107,14 +107,23 @@ pub fn schedule_blare(component: &mut SingleShotAudioComponent) -> Result<()> {
 pub fn single_shot_audio_system(engine: &mut Engine) -> Result<()> {
     // process all tracks, find new scheduled
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
-    for (_, audio_component, audio_source) in
-        engine.iterate_two_components_mut::<SingleShotAudioComponent, AudioSourceComponent>()?
+    for (_, audio_component, audio_source, player_component) in
+        engine.iterate_three_components_mut::<SingleShotAudioComponent, AudioSourceComponent, PlayerComponent>()?
     {
         if audio_component.active {
             // start the new track
             if audio_component.elapsed == 0.0 {
                 audio_source.set_sound(audio_component.tracks[audio_component.chosen_track]);
+                // If player under the water, lower the pitch
+                let rand = if player_component.under_water {
+                    rand::random_range(0.35..0.55)
+                } else {
+                    rand::random_range(0.85..1.15)
+                };
+                audio_source.set_speed(rand);
+                audio_component.timeout = BLARE_LENGTH * rand;
                 audio_source.play();
+
                 audio_component.elapsed += delta_time;
             } else if audio_component.elapsed >= audio_component.timeout {
                 audio_source.stop();

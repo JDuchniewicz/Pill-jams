@@ -13,7 +13,8 @@ define_component!(PlayerComponent {
     id: PlayerId,
     last_thrust_direction: Vector3f,
     air_time: f32,
-    flip: i32
+    flip: i32,
+    under_water: bool,
 });
 
 // Live-tunable ship physics parameters, shared between the physics system and the
@@ -266,6 +267,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             flip: 1,
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
+            under_water: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
         .with_component(
@@ -322,6 +324,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             flip: 1,
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
+            under_water: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
         .with_component(

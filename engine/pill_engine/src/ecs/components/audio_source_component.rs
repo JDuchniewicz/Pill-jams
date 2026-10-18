@@ -19,6 +19,7 @@ const DEFERRED_REQUEST_VARIANT_SET_VOLUME: usize = 1;
 const DEFERRED_REQUEST_VARIANT_PLAY_SOUND: usize = 2;
 const DEFERRED_REQUEST_VARIANT_PAUSE_SOUND: usize = 3;
 const DEFERRED_REQUEST_VARIANT_STOP_SOUND: usize = 4;
+const DEFERRED_REQUEST_VARIANT_SET_SPEED: usize = 5;
 
 // --- Builder ---
 
@@ -67,6 +68,8 @@ pub struct AudioSourceComponent {
     #[readonly]
     pub volume: f32,
     #[readonly]
+    pub speed: f32,
+    #[readonly]
     pub play_on_awake: bool,
     #[readonly]
     pub sound_handle: Option<SoundHandle>,
@@ -94,6 +97,7 @@ impl AudioSourceComponent {
         Self {
             sound_type: SoundType::Sound3D,
             volume: 1.0,
+            speed: 1.0,
             play_on_awake: false,
             sound_handle: None,
             sink_handle: None,
@@ -123,6 +127,13 @@ impl AudioSourceComponent {
         self.volume = volume;
         if self.sink_handle.is_some() {
             self.post_deferred_update_request(DEFERRED_REQUEST_VARIANT_SET_VOLUME);
+        }
+    }
+
+    pub fn set_speed(&mut self, speed: f32) {
+        self.speed = speed;
+        if self.sink_handle.is_some() {
+            self.post_deferred_update_request(DEFERRED_REQUEST_VARIANT_SET_SPEED);
         }
     }
 
@@ -269,12 +280,14 @@ impl Component for AudioSourceComponent {
                             let sink = audio_manager.get_ambient_sink(handle);
                             sink.append(sound_data);
                             sink.set_volume(self.volume);
+                            sink.set_speed(self.speed);
                             sink.play();
                         }
                         SoundType::Sound3D => {
                             let sink = audio_manager.get_spatial_sink(handle);
                             sink.append(sound_data);
                             sink.set_volume(self.volume);
+                            sink.set_speed(self.speed);
                             sink.play();
                         }
                     }
@@ -297,6 +310,19 @@ impl Component for AudioSourceComponent {
             }
             DEFERRED_REQUEST_VARIANT_STOP_SOUND => {
                 self.stop_playing(engine)?;
+            }
+            DEFERRED_REQUEST_VARIANT_SET_SPEED => {
+                if let Some(handle) = self.sink_handle {
+                    let audio_manager = engine.get_global_component::<AudioManagerComponent>()?;
+                    match self.sound_type {
+                        SoundType::Sound3D => {
+                            audio_manager.get_spatial_sink(handle).set_speed(self.speed)
+                        }
+                        SoundType::Sound2D => {
+                            audio_manager.get_ambient_sink(handle).set_speed(self.speed)
+                        }
+                    }
+                }
             }
             _ => {
                 panic!("Critical: Processing deferred update request with value {} in {} failed. Handling is not implemented", request, get_type_name::<Self>().specific_object_style());
