@@ -1,5 +1,6 @@
 mod background_pass;
 mod cartoon_pass;
+mod container;
 mod duck;
 mod game;
 mod particle_system;

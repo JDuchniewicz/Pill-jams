@@ -42,12 +42,32 @@ fn duck_spawn_system(engine: &mut Engine) -> Result<()> {
     Ok(())
 }
 
-/// Builds a duck: sprite + rigid body + hull collider + water floating, i.e. the same setup as a
-/// player ship, minus inputs, particles and audio.
+/// Builds a duck at the duck spawn position.
 pub fn spawn_duck(engine: &mut Engine) -> Result<()> {
     let texture = engine
         .get_global_component::<DuckSpawnerComponent>()?
         .texture;
+    spawn_floating_prop(
+        engine,
+        texture,
+        Vector3f::new(
+            DUCK_SPAWN_POSITION[0],
+            DUCK_SPAWN_POSITION[1],
+            DUCK_SPAWN_POSITION[2],
+        ),
+        DUCK_SPRITE_SIZE,
+    )
+}
+
+/// Shared builder for the non-player floating props (ducks, containers): sprite + rigid body +
+/// hull collider + water floating, i.e. the same setup as a player ship, minus inputs, particles
+/// and audio. The sprite uses the submerged sprite shader.
+pub fn spawn_floating_prop(
+    engine: &mut Engine,
+    texture: TextureHandle,
+    position: Vector3f,
+    sprite_size: f32,
+) -> Result<()> {
     let params = {
         let shared = engine.get_global_component::<PlayerPhysicsComponent>()?;
         let guard = shared
@@ -58,21 +78,13 @@ pub fn spawn_duck(engine: &mut Engine) -> Result<()> {
     };
     let active_scene = engine.get_active_scene_handle()?;
 
-    let duck = engine
+    let entity = engine
         .build_entity(active_scene)
-        .with_component(
-            TransformComponent::builder()
-                .position(Vector3f::new(
-                    DUCK_SPAWN_POSITION[0],
-                    DUCK_SPAWN_POSITION[1],
-                    DUCK_SPAWN_POSITION[2],
-                ))
-                .build(),
-        )
+        .with_component(TransformComponent::builder().position(position).build())
         .with_component(
             SpriteRenderingComponent::builder()
                 .texture(&texture)
-                .size(Vector2f::new(DUCK_SPRITE_SIZE, DUCK_SPRITE_SIZE))
+                .size(Vector2f::new(sprite_size, sprite_size))
                 // 2D game objects stay visible over the water
                 .depth_test(false)
                 // Hull below the water surface is drawn at half brightness
@@ -103,8 +115,8 @@ pub fn spawn_duck(engine: &mut Engine) -> Result<()> {
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&params)))
         .build();
 
-    // Same low ballast as the ships, so the duck floats upright instead of capsizing.
-    apply_float_ballast(engine, duck, &params)?;
+    // Same low ballast as the ships, so the prop floats upright instead of capsizing.
+    apply_float_ballast(engine, entity, &params)?;
 
     Ok(())
 }
