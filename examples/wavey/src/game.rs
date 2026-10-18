@@ -327,6 +327,12 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut player_physics.thrust_force, 0.0..=3000.0)
                                     .text("Thrust force"),
                             );
+                            ui.add(egui::Slider::new(
+                                &mut player_physics.thrust_down_force,
+                                0.0..=3000.0,
+                            )
+                                .text("Thrust down force"),
+                            );
                             ui.add(
                                 egui::Slider::new(&mut player_physics.input_deadzone, 0.0..=1.0)
                                     .text("Input dead zone"),
