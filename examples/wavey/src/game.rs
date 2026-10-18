@@ -1,7 +1,7 @@
 use crate::background_pass::{BackgroundQuadPass, SkyParams};
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
 use crate::player::PlayerPhysicsComponent;
-use crate::post_process::{PostProcessParams, PostProcessPass};
+use crate::post_process::{DitherPattern, PostProcessParams, PostProcessPass};
 use crate::water::WaterParamsComponent;
 use crate::water_mesh::WaterLookParams;
 use pill_engine::{define_global_component, game::*};
@@ -262,10 +262,20 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut player_physics.restitution, 0.0..=1.0)
                                     .text("Restitution"),
                             );
-                            ui.add(egui::Slider::new (&mut player_physics.water_drag_linear, 0.0..=100.0)
-                            .text("Water linear drag"));
-                            ui.add(egui::Slider::new (&mut player_physics.water_drag_quadratic, 0.0..=100.0)
-                            .text("Water quadratic drag"));
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.water_drag_linear,
+                                    0.0..=100.0,
+                                )
+                                .text("Water linear drag"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.water_drag_quadratic,
+                                    0.0..=100.0,
+                                )
+                                .text("Water quadratic drag"),
+                            );
                         });
 
                     egui::CollapsingHeader::new("Rigid body")
@@ -497,6 +507,62 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut post_process.vignette_softness, 0.001..=1.0)
                                     .text("Softness"),
                             );
+                        });
+
+                    egui::CollapsingHeader::new("4. Dithering")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            egui::ComboBox::from_label("Pattern")
+                                .selected_text(post_process.dither_pattern.label())
+                                .show_ui(ui, |ui| {
+                                    for pattern in DitherPattern::ALL {
+                                        ui.selectable_value(
+                                            &mut post_process.dither_pattern,
+                                            pattern,
+                                            pattern.label(),
+                                        );
+                                    }
+                                });
+                            ui.add(
+                                egui::Slider::new(&mut post_process.dither_strength, 0.0..=1.0)
+                                    .step_by(0.02)
+                                    .text("Strength"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut post_process.dither_levels, 2..=256)
+                                    .logarithmic(true)
+                                    .text("Levels"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut post_process.dither_scale, 1.0..=8.0)
+                                    .step_by(0.25)
+                                    .text("Pattern scale (px)"),
+                            );
+
+                            // Pattern-specific controls, shown only for the patterns that use them.
+                            if post_process.dither_pattern.uses_extra_parameters() {
+                                ui.separator();
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut post_process.dither_angle,
+                                        -180.0..=180.0,
+                                    )
+                                    .text("Angle (deg)"),
+                                );
+                                let width_label = match post_process.dither_pattern {
+                                    DitherPattern::Halftone => "Dot size",
+                                    _ => "Line width",
+                                };
+                                ui.add(
+                                    egui::Slider::new(&mut post_process.dither_width, 0.01..=1.0)
+                                        .step_by(0.01)
+                                        .text(width_label),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut post_process.dither_softness, 0.0..=1.0)
+                                        .text("Softness"),
+                                );
+                            }
                         });
                 });
         })?;
