@@ -4,6 +4,7 @@ use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 const BUOYANCY_STRENGTH: f32 = 100.0;
 const SHIP_MASS: f32 = 10.0;
+const WAVE_SLOPE_STRENGTH: f32 = 100.0;
 define_component!(PlayerComponent { id: PlayerId });
 
 // TODO: for now we are playing locally -> maybe also play over network
@@ -132,26 +133,35 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     // Compute buoyancy from the current water height
     let mut ship_forces = Vec::with_capacity(ship_states.len());
     for (handle, input_x, player_position, player_rotation) in ship_states {
+        // store water samples at points
+        let mut water_samples = [(0.0f32, 0.0f32); 3];
         // calculate the force triplet
         let mut point_buoyancy_forces = Vec::with_capacity(3);
-        for local_point in HULL_POINTS {
+        for (i, local_point) in HULL_POINTS.iter().enumerate() {
             let world_point = player_position + player_rotation * local_point;
-            let water_height = water_height_at_x(engine, world_point.x)?;
+            water_samples[i] = (world_point.x, water_height_at_x(engine, world_point.x)?);
 
-            let point_buoyancy_force = if world_point.y < water_height {
-                let depth = water_height - world_point.y;
+            let point_buoyancy_force = if world_point.y < water_samples[i].1 {
+                let depth = water_samples[i].1 - world_point.y;
                 Vector3f::new(0.0, depth * BUOYANCY_STRENGTH, 0.0)
             } else {
                 Vector3f::new(0.0, 0.0, 0.0)
             };
             point_buoyancy_forces.push((world_point, point_buoyancy_force));
         }
-        ship_forces.push((handle, input_x, point_buoyancy_forces));
+
+        let dx = water_samples[2].0 - water_samples[0].0;
+        let slope = if dx > 0.001 {
+            (water_samples[2].1 - water_samples[2].0) / dx
+        } else {
+            0.0
+        };
+        ship_forces.push((handle, input_x, point_buoyancy_forces, slope));
     }
     // Apply thrust and buoyancy to Rapier's bodies
     let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-    for (handle, input_x, point_buoyancy_forces) in ship_forces {
+    for (handle, input_x, point_buoyancy_forces, slope) in ship_forces {
         let Some(body) = physics.rigid_body_set.get_mut(handle) else {
             continue;
         };
@@ -164,12 +174,23 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             body.add_force(Vector3f::new(-input_x * THRUST_FORCE, 0.0, 0.0), true);
         }
 
+        let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
+
         // Buoyancy pushes up while the player is below the water surface
         for (world_point, buoyancy_force) in point_buoyancy_forces {
             if buoyancy_force.y != 0.0 {
                 body.add_force_at_point(buoyancy_force, world_point, true);
             }
         }
+
+        // Add the force of going up or down the slope
+        if in_water {
+            body.add_force(
+                Vector3f::new(-slope.clamp(-1.0, 1.0) * WAVE_SLOPE_STRENGTH, 0.0, 0.0),
+                true,
+            );
+        }
+
         //constant downward force due to ship weight
         body.add_force(
             Vector3f::new(0.0, -SHIP_MASS * BUOYANCY_STRENGTH, 0.0),
