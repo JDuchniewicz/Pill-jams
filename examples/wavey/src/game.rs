@@ -232,6 +232,10 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut player_physics.restitution, 0.0..=1.0)
                                     .text("Restitution"),
                             );
+                            ui.add(egui::Slider::new (&mut player_physics.water_drag_linear, 0.0..=100.0)
+                            .text("Water linear drag"));
+                            ui.add(egui::Slider::new (&mut player_physics.water_drag_quadratic, 0.0..=100.0)
+                            .text("Water quadratic drag"));
                         });
 
                     egui::CollapsingHeader::new("Rigid body")
