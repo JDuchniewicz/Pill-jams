@@ -3,11 +3,11 @@ use pill_engine::{define_component, game::*};
 use crate::player::{PlayerPhysicsComponent, PlayerPhysicsParams};
 use crate::water::water_height_at_x;
 
-/// Per-entity water-floating setup, plus the water state measured for it every frame.
-///
-/// Any entity with this component (and a `RigidBodyComponent`) gets buoyancy at its hull probe
-/// points, submersion-scaled water drag and the wave-slope force from `water_floating_system`.
-/// The ships and the ducks share the same code path; only the probe points differ per entity.
+// Per-entity water-floating setup, plus the water state measured for it every frame.
+//
+// Any entity with this component (and a `RigidBodyComponent`) gets buoyancy at its hull probe
+// points, submersion-scaled water drag and the wave-slope force from `water_floating_system`.
+// The ships and the ducks share the same code path; only the probe points differ per entity.
 define_component!(WaterFloatingComponent {
     // Local-space buoyancy probes (hull samples), in world units.
     hull_points: [Vector3f; 3],
@@ -28,6 +28,22 @@ impl WaterFloatingComponent {
             submersion: 0.0,
             water_level: 0.0,
         }
+    }
+
+    /// Height of a world-space Y above the water surface (positive = above the water).
+    pub fn height_above_water(&self, world_y: f32) -> f32 {
+        world_y - self.water_level
+    }
+
+    /// True when `world_y` is more than `depth` world units below the water surface — the same
+    /// comparison the particle opacity band uses (`height_above_water` < -0.2).
+    pub fn is_below_water(&self, world_y: f32, depth: f32) -> bool {
+        self.height_above_water(world_y) < -depth.max(0.0)
+    }
+
+    /// True when every hull probe is below the surface, i.e. the whole hull is submerged.
+    pub fn is_fully_submerged(&self) -> bool {
+        self.submersion >= 0.999
     }
 }
 
