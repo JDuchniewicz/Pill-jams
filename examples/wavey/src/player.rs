@@ -14,6 +14,8 @@ define_component!(PlayerComponent {
     last_thrust_direction: Vector3f,
     air_time: f32,
     flip: i32,
+    dive_hold_time: f32,
+    dive_was_held: bool,
     under_water: bool,
 });
 
@@ -46,10 +48,8 @@ const HULL_CONTACT_MARGIN_X: f32 = 1.08;
 const HULL_CONTACT_MARGIN_Y: f32 = 1.18;
 const AIR_DRAG_DECEL: f32 = 0.5; // deceleration factor when ship is in air
 
-// Downward thrust multiplier. Must be large enough to beat the buoyancy force
-// (params.buoyancy_strength per unit of submersion) so the ship can dive.
-const DIVE_THRUST_MULTIPLIER: f32 = 10.0;
-
+const DIVE_CHARGE_MAX: f32 = 2.0;
+const DIVE_RELEASE_IMPULSE_PER_SECOND: f32 = 500.0;
 // Keep the total mass at `ship_mass`, but concentrate most of it near the ship
 // origin (below the painted hull), rather than the centroid of the raised shape.
 // This is physical ballast, not a fake restoring torque.
@@ -268,6 +268,8 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             flip: 1,
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
+            dive_hold_time: 0.0,
+            dive_was_held: false,
             under_water: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
@@ -325,6 +327,8 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             flip: 1,
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
+            dive_hold_time: 0.0,
+            dive_was_held: false,
             under_water: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
@@ -458,6 +462,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
     let controls = read_ship_controls(engine)?;
 
+    // Dive charge state, preserved per player across frames.
+    let mut next_dive_hold_time = [0.0f32; NUM_PLAYERS as usize];
+    let mut next_dive_was_held = [false; NUM_PLAYERS as usize];
+
     // Collect player rigid body handles, input values and this frame's water state. The floating
     // system runs first, so `in_water` / `water_level` are already up to date.
     let mut ships = Vec::new();
@@ -469,6 +477,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     >()? {
         if let Some(handle) = rb.get_rigid_body_handle() {
             let player_index = player.id as usize;
+            next_dive_hold_time[player_index] = player.dive_hold_time;
+            next_dive_was_held[player_index] = player.dive_was_held;
             ships.push((
                 handle,
                 player_index,
@@ -620,17 +630,31 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             let thrusting = input_x.abs() > params.input_deadzone && in_water;
             emitter_states[player_index] = (thrusting, input_x, water_level);
 
-            // Horizontal thrust is only available in water. Vertical thrust is
-            // DOWNWARD only: holding W (or pushing the stick up) must not lift the
-            // ship, but holding S can drive it under the surface, beating buoyancy.
-            // Upward motion comes exclusively from buoyancy, which still allows jumps.
+            // Horizontal thrust is only available in water. There is no upward
+            // thrust: buoyancy alone lifts the ship and still allows jumps.
             let mut thrust = Vector3f::ZERO;
             if in_water && input_x.abs() > params.input_deadzone {
                 thrust.x = -input_x;
             }
-            if input_y > params.input_deadzone {
-                thrust.y = -input_y * DIVE_THRUST_MULTIPLIER;
+            // Holding the dive input only charges the dive; it must not move the
+            // ship down. The downward impulse is applied once, on release,
+            // proportional to the held time and capped by DIVE_CHARGE_MAX.
+            let diving = input_y > params.input_deadzone;
+            if diving {
+                next_dive_hold_time[player_index] += delta_time;
+            } else {
+                if next_dive_was_held[player_index] {
+                    let charge = next_dive_hold_time[player_index].min(DIVE_CHARGE_MAX);
+                    let impulse = Vector3f::new(
+                        0.0,
+                        -charge * DIVE_RELEASE_IMPULSE_PER_SECOND,
+                        0.0,
+                    );
+                    body.apply_impulse(impulse, true);
+                }
+                next_dive_hold_time[player_index] = 0.0;
             }
+            next_dive_was_held[player_index] = diving;
 
             if thrust != Vector3f::ZERO {
                 body.add_force(thrust * params.thrust_force, true);
@@ -700,6 +724,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         let player_index = player_component.id as usize;
         player_component.air_time = next_air_time[player_index];
         player_component.last_thrust_direction = next_thrust_direction[player_index];
+        player_component.dive_hold_time = next_dive_hold_time[player_index];
+        player_component.dive_was_held = next_dive_was_held[player_index];
 
         if controls[player_index].drop_bomb {
             //        add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
