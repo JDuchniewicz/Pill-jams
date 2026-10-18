@@ -191,16 +191,17 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
     engine.register_component::<ColliderComponent>(active_scene)?;
     engine.register_component::<PlayerComponent>(active_scene)?;
 
+    // Water floating physics (buoyancy, drag, slope) is shared with ducks. It must be registered
+    // before the player system: it clears the per-frame forces and measures the water state that
+    // the player system then reads and adds thrust on top of. If it ran after the player system,
+    // its force reset would wipe the thrust applied by the player on the same frame.
+    crate::water_floating::start(engine, active_scene)?;
+
     engine.add_system("player_movement_system", player_movement_system)?;
     engine.add_system("submerge_system", submerge_system)?;
 
     // Particle emitters live on the player entities; the pass draws every emitter in one call.
     crate::particle_system::start(engine, active_scene)?;
-
-    // Water floating physics (buoyancy, drag, slope) is shared with ducks. It must be registered
-    // before the player system: it clears the per-frame forces and measures the water state that
-    // the player system then reads and adds thrust on top of.
-    crate::water_floating::start(engine, active_scene)?;
 
     // Shared, live-editable physics parameters (also read by the "Player physics" egui window).
     let player_physics = Arc::new(Mutex::new(PlayerPhysicsParams::default()));
