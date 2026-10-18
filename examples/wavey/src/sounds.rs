@@ -1,8 +1,6 @@
-use pill_engine::{define_component, define_global_component, game::*};
+use pill_engine::{define_component, game::*};
 
-// TODO: download the ambient music and play it
 // TODO:LIST
-// audio blares
 // audio music
 // collision in ass and rumble
 // containers?
