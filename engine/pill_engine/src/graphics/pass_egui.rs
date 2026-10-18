@@ -171,6 +171,14 @@ impl Pass for PassEgui {
         frame_target: &FrameTarget,
         _world: &WorldQuery<'_>,
     ) -> Result<()> {
+        // Hidden UI (the default in release builds) skips the pass completely: an empty egui frame
+        // still submits draw work and can trip the scissor-rect clamp during a resize, which
+        // invalidates the whole command buffer. Queued input is dropped so it cannot pile up.
+        if !self.client.is_visible() {
+            self.client.take_events();
+            return Ok(());
+        }
+
         let drawer = self
             .drawer
             .as_mut()

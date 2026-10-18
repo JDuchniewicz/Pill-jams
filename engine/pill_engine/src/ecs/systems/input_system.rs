@@ -1,7 +1,7 @@
 use crate::{
     ecs::{
         GamepadAxis, GamepadButton, GamepadEvent, HapticCommand, InputComponent, InputEvent,
-        KeyboardEvent, MouseEvent,
+        KeyboardEvent, MouseEvent, TouchEvent,
     },
     engine::Engine,
 };
@@ -319,6 +319,17 @@ fn process_input_queue(engine: &mut Engine) -> Result<()> {
             // Mouse position
             InputEvent::Mouse(MouseEvent::Position { position }) => {
                 input_component.set_mouse_position(position);
+            }
+
+            // Touches: press/move set the position, release/cancel drop the entry
+            InputEvent::Touch(TouchEvent::Started { id, position })
+            | InputEvent::Touch(TouchEvent::Moved { id, position }) => {
+                input_component.set_touch(id, position);
+            }
+
+            InputEvent::Touch(TouchEvent::Ended { id })
+            | InputEvent::Touch(TouchEvent::Cancelled { id }) => {
+                input_component.remove_touch(id);
             }
 
             // Gamepad buttons

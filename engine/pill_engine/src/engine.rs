@@ -495,6 +495,15 @@ impl Engine {
         self.renderer.resize(new_window_size);
     }
 
+    /// Current window size in physical pixels, the same space as mouse and touch positions.
+    /// Dividing one of those positions by this gives normalized `0..1` coordinates.
+    pub fn get_window_size(&self) -> Vector2f {
+        Vector2f::new(
+            self.window_size.width as f32,
+            self.window_size.height as f32,
+        )
+    }
+
     pub fn pass_keyboard_key_input(&mut self, keyboard_input: &KeyEvent) {
         let state: winit::event::ElementState = keyboard_input.state;
         match keyboard_input.physical_key {
@@ -541,6 +550,21 @@ impl Engine {
         });
         self.input_queue.push_back(input_event);
         debug!(LogContext::Input => "Got new mouse position input");
+    }
+
+    pub fn pass_touch_input(&mut self, touch: &winit::event::Touch) {
+        let id = touch.id;
+        let position = Vector2f::new(touch.location.x as f32, touch.location.y as f32);
+
+        let input_event = InputEvent::Touch(match touch.phase {
+            winit::event::TouchPhase::Started => TouchEvent::Started { id, position },
+            winit::event::TouchPhase::Moved => TouchEvent::Moved { id, position },
+            winit::event::TouchPhase::Ended => TouchEvent::Ended { id },
+            winit::event::TouchPhase::Cancelled => TouchEvent::Cancelled { id },
+        });
+
+        self.input_queue.push_back(input_event);
+        debug!(LogContext::Input => "Got new touch input");
     }
 
     pub fn pass_input_to_egui(&mut self, event: &winit::event::WindowEvent) {

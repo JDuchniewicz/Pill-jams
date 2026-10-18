@@ -193,6 +193,9 @@ async fn run_async(game: Box<dyn PillGame>, config_ini: &'static str) {
                 WindowEvent::CursorMoved { position, .. } => {
                     engine.pass_mouse_position_input(position);
                 }
+                WindowEvent::Touch(touch) => {
+                    engine.pass_touch_input(touch);
+                }
                 WindowEvent::Resized(physical_size) => {
                     if physical_size.width > 0 && physical_size.height > 0 {
                         engine.resize(*physical_size);

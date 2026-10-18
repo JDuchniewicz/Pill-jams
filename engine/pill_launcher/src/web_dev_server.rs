@@ -27,7 +27,8 @@ const RELOAD_SCRIPT: &str = concat!(
 type Subscribers = Arc<Mutex<Vec<mpsc::Sender<()>>>>;
 
 pub fn run(game_project_directory_path: &Path, compile_mode: &CompileMode) -> Result<()> {
-    wasm_build::build(game_project_directory_path, compile_mode, None)?;
+    // The dev server only hosts <game>/build/wasm, so no secondary bundle destination here.
+    wasm_build::build(game_project_directory_path, compile_mode, None, None)?;
 
     let build_wasm_dir = game_project_directory_path.join("build").join("wasm");
     let subscribers: Subscribers = Arc::new(Mutex::new(Vec::new()));

@@ -1368,15 +1368,22 @@ fn run_app() -> Result<()> {
                     .context("Failed to build game project")?;
                 }
                 BuildTarget::Web => {
-                    if matches.occurrences_of("output-path") > 0 {
-                        println!(
-                            "Note: `-o/--output-path` is ignored with `-t wasm`; output is fixed at <game>/build/wasm/"
-                        );
-                    }
+                    // Optional: publish the wasm-bindgen bundle to a project that embeds it (a
+                    // website, a kiosk build, ...) while <game>/build/wasm/ stays the standalone
+                    // hostable output.
+                    let wasm_output_directory_path = output_directory_path_argument
+                        .map(|path| {
+                            PathBuf::from(path)
+                                .absolutize()
+                                .map(|path| path.to_path_buf())
+                                .context("Failed to absolutize wasm output directory path")
+                        })
+                        .transpose()?;
                     wasm_build::build(
                         &game_project_directory_path,
                         &compile_mode,
                         max_wasm_size_kb,
+                        wasm_output_directory_path.as_deref(),
                     )
                     .context("Failed to build game project for wasm")?;
                 }

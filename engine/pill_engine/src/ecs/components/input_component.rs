@@ -242,10 +242,19 @@ pub enum GamepadEvent {
     },
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum TouchEvent {
+    Started { id: u64, position: Vector2f },
+    Moved { id: u64, position: Vector2f },
+    Ended { id: u64 },
+    Cancelled { id: u64 },
+}
+
 pub enum InputEvent {
     Mouse(MouseEvent),
     Keyboard(KeyboardEvent),
     Gamepad(GamepadEvent),
+    Touch(TouchEvent),
 }
 
 pub const KEYBOARD_KEY_MAX: usize = 256;
@@ -269,6 +278,11 @@ pub struct InputComponent {
     // Mouse scroll wheels delta
     pub(crate) current_mouse_scroll_delta: Vector2f,
     pub(crate) current_mouse_scroll_pixel_delta: Vector2f,
+
+    // Active touches keyed by platform touch id. Positions are physical pixels, the same space as
+    // `current_mouse_position`. Unlike the per-frame key/button state these live until the platform
+    // reports the touch as ended or cancelled.
+    pub(crate) active_touches: HashMap<u64, Vector2f>,
 
     // Gamepad buttons and axes
     pub(crate) pressed_gamepad_buttons: GamepadButtonState,
@@ -307,6 +321,8 @@ impl InputComponent {
 
             current_mouse_scroll_delta: Vector2f::new(0.0, 0.0),
             current_mouse_scroll_pixel_delta: Vector2f::new(0.0, 0.0),
+
+            active_touches: HashMap::new(),
 
             pressed_gamepad_buttons: gamepad_button_state_zero(),
             released_gamepad_buttons: gamepad_button_state_zero(),
@@ -466,6 +482,45 @@ impl InputComponent {
 
     pub fn set_mouse_position(&mut self, position: Vector2f) {
         self.current_mouse_position = position;
+    }
+
+    // - Touch
+
+    /// Records a touch at `position` (physical pixels), or moves an existing one.
+    pub fn set_touch(&mut self, id: u64, position: Vector2f) {
+        self.active_touches.insert(id, position);
+    }
+
+    /// Drops a touch the platform reported as ended or cancelled.
+    pub fn remove_touch(&mut self, id: u64) {
+        self.active_touches.remove(&id);
+    }
+
+    /// Drops every active touch, e.g. when the platform loses the pointer stream.
+    pub fn clear_touches(&mut self) {
+        self.active_touches.clear();
+    }
+
+    /// Position of one active touch, in physical pixels.
+    pub fn get_touch(&self, id: u64) -> Option<Vector2f> {
+        self.active_touches.get(&id).copied()
+    }
+
+    /// Every active touch as `(id, position in physical pixels)`.
+    pub fn get_touches(&self) -> impl Iterator<Item = (u64, Vector2f)> + '_ {
+        self.active_touches
+            .iter()
+            .map(|(id, position)| (*id, *position))
+    }
+
+    /// How many fingers are currently down.
+    pub fn get_touch_count(&self) -> usize {
+        self.active_touches.len()
+    }
+
+    /// Whether anything is touching the screen right now.
+    pub fn is_touch_active(&self) -> bool {
+        !self.active_touches.is_empty()
     }
 
     // Gamepad buttons (get by PlayerId, set by Gamepad's Id)

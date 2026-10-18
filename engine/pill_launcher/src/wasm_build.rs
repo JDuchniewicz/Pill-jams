@@ -21,6 +21,7 @@ pub fn build(
     game_project_directory_path: &Path,
     compile_mode: &CompileMode,
     max_size_kb: Option<u64>,
+    output_directory_path: Option<&Path>,
 ) -> Result<()> {
     println!("Building WASM/WebGPU target for game project at {game_project_directory_path:?}...");
     if *compile_mode == CompileMode::HotReload {
@@ -52,6 +53,13 @@ pub fn build(
         &game_project_directory_path.join("res"),
         &build_wasm_dir.join("res"),
     )?;
+
+    // Optional second destination: the bare wasm-bindgen bundle, ready to be imported by another
+    // project (a website bundler, a CDN drop, ...). Everything the standalone host needs beyond
+    // the module itself is left out.
+    if let Some(output_dir) = output_directory_path {
+        publish_wasm_bundle(&scratch_pkg_dir, output_dir)?;
+    }
 
     // Size report — only meaningful on release (debug wasm is dominated by debuginfo).
     if *compile_mode == CompileMode::Release {
@@ -86,6 +94,36 @@ pub fn build(
     println!("Done! Serve with:");
     println!("  PillLauncher -a run -t wasm -p {game_project_directory_path:?}");
     println!("  (or any static server pointed at {build_wasm_dir:?})");
+    if let Some(output_dir) = output_directory_path {
+        println!("WASM bundle published to {output_dir:?}");
+    }
+    Ok(())
+}
+
+// Copy the wasm-bindgen output (JS glue, binary and typings) into `dst`.
+//
+// This is the shape a bundler wants: `pill_web_app.js` resolves `pill_web_app_bg.wasm` through
+// `new URL(..., import.meta.url)`, so both files must stay side by side. The web shell
+// (index.html, logo) and the game's res/ are not copied — those belong to the standalone output
+// in <game>/build/wasm/.
+fn publish_wasm_bundle(scratch_pkg_dir: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst).with_context(|| format!("Failed to create {dst:?}"))?;
+
+    for file in [
+        "pill_web_app.js",
+        "pill_web_app_bg.wasm",
+        "pill_web_app.d.ts",
+        "pill_web_app_bg.wasm.d.ts",
+    ] {
+        let src = scratch_pkg_dir.join(file);
+        // Typings are optional: wasm-pack only emits them for some targets.
+        if !src.is_file() {
+            continue;
+        }
+        let target = dst.join(file);
+        fs::copy(&src, &target).with_context(|| format!("Failed to copy {src:?} to {target:?}"))?;
+    }
+
     Ok(())
 }
 

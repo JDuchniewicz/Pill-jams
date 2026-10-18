@@ -49,7 +49,7 @@ pub use components::deferred_update_component::{
 
 pub use components::input_component::{
     GamepadAxis, GamepadButton, GamepadEvent, HapticCommand, InFlight, InputComponent, InputEvent,
-    KeyboardEvent, MouseEvent, PlayerId,
+    KeyboardEvent, MouseEvent, PlayerId, TouchEvent,
 };
 
 pub use components::transform_component::TransformComponent;

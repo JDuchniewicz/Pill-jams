@@ -1,5 +1,6 @@
 #![cfg(feature = "ui")]
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 type UiFunction = Box<dyn Fn(&egui::Context) + Send>;
@@ -7,6 +8,9 @@ type UiFunction = Box<dyn Fn(&egui::Context) + Send>;
 pub struct EguiClient {
     events: Mutex<Vec<winit::event::WindowEvent>>,
     ui: Mutex<Option<UiFunction>>,
+    // False hides the whole UI: no UI function is built and the egui pass is skipped. Release
+    // builds start hidden.
+    visible: AtomicBool,
 }
 
 impl EguiClient {
@@ -15,7 +19,19 @@ impl EguiClient {
         Arc::new(Self {
             events: Mutex::new(Vec::new()),
             ui: Mutex::new(None),
+            visible: AtomicBool::new(true),
         })
+    }
+
+    /// Whether the UI is drawn at all (engine windows plus game overlays).
+    pub fn is_visible(&self) -> bool {
+        self.visible.load(Ordering::Relaxed)
+    }
+
+    /// Enables or disables the whole UI. Registered UI callbacks are kept, so turning the UI back
+    /// on restores them as-is.
+    pub fn set_visible(&self, visible: bool) {
+        self.visible.store(visible, Ordering::Relaxed);
     }
 
     /// Enqueues a window event for delivery to the egui input handler on the next frame.

@@ -592,18 +592,28 @@ struct ShipControls {
     horn_blare: bool,
 }
 
+/// Touch layout, mirroring the keyboard for Player 1: the left and right halves of the window
+/// steer, and the bottom band charges a dive (what holding S does). Expressed as a fraction of the
+/// window height so it scales with the device.
+const TOUCH_SINK_BAND_HEIGHT: f32 = 0.25;
+
 fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as usize]> {
     let input = engine.get_global_component::<InputComponent>()?;
-    let keyboard_x =
-        (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
-    let keyboard_dive = input.get_key(KeyboardKey::KeyS);
+
+    // Touch and keyboard share Player 1's controls, so a touch simply counts as the matching key
+    // being held. Both are digital, so they combine without scaling the thrust.
+    let (touch_left, touch_right, touch_dive) = read_touch_controls(engine, &input);
+    let steer_left = input.get_key(KeyboardKey::KeyA) || touch_left;
+    let steer_right = input.get_key(KeyboardKey::KeyD) || touch_right;
+    let keyboard_x = (steer_right as i32 - steer_left as i32) as f32;
+    let keyboard_dive = input.get_key(KeyboardKey::KeyS) || touch_dive;
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
     let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
     Ok(std::array::from_fn(|i| {
         let id = PlayerId::try_from(i as u8).unwrap();
         ShipControls {
-            // Keyboard is reserved for Player 1, not both ships.
+            // Keyboard (and touch) is reserved for Player 1, not both ships.
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
             movement_y: input.get_gamepad_button_pressed(id, GamepadButton::A)
@@ -614,6 +624,38 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
                 || (i == 0 && keyboard_blare),
         }
     }))
+}
+
+/// Splits the active touches into the touch controls: `(left, right, dive)`.
+///
+/// * Inside the bottom band → dive (charge on press, burst on release, like S).
+/// * Otherwise → whichever half of the window the finger is in.
+///
+/// Several fingers can be down at once (steer and dive together); dragging a finger between the
+/// halves moves the press to the new half on the next frame.
+fn read_touch_controls(engine: &Engine, input: &InputComponent) -> (bool, bool, bool) {
+    let window_size = engine.get_window_size();
+
+    if window_size.x <= 0.0 || window_size.y <= 0.0 {
+        return (false, false, false);
+    }
+
+    let sink_band_top = window_size.y * (1.0 - TOUCH_SINK_BAND_HEIGHT);
+    let mut steer_left = false;
+    let mut steer_right = false;
+    let mut dive = false;
+
+    for (_, position) in input.get_touches() {
+        if position.y >= sink_band_top {
+            dive = true;
+        } else if position.x < window_size.x * 0.5 {
+            steer_left = true;
+        } else {
+            steer_right = true;
+        }
+    }
+
+    (steer_left, steer_right, dive)
 }
 
 pub(crate) fn ship_buoyancy_points(params: &PlayerPhysicsParams) -> [Vector3f; 3] {
