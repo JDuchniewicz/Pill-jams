@@ -3,6 +3,7 @@ use pill_engine::{define_component, define_global_component, game::*};
 use crate::particle_system::ParticleSystemComponent;
 use crate::sounds::schedule_blare;
 use crate::sounds::SingleShotAudioComponent;
+use crate::sounds::BLARE_VOLUME;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 use crate::water_floating::WaterFloatingComponent;
@@ -228,6 +229,9 @@ fn ship_collider(params: &PlayerPhysicsParams) -> ColliderComponent {
         .friction(params.friction)
         .restitution(params.restitution)
         .mass(params.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
+        // Emit hull-to-hull Started events so Pill can attach the solved impact
+        // force and the current front/middle/back sensor overlaps.
+        .active_events(ActiveEvents::COLLISION_EVENTS)
         .part(
             ColliderPart::new("front", section_shape.clone())
                 .translation(Vector3f::new(section_x, section_y, 0.0)),
@@ -257,9 +261,15 @@ fn effective_ship_section(section: &str, facing: i32) -> &str {
     }
 }
 
-/// Game systems run before Pill's PostGame physics step, so these are
-/// collisions collected in the preceding frame's physics step.
-/// React only on Started: a sustained overlap should not retrigger horns.
+// Contact force is Rapier's total solved normal impulse divided by fixed dt.
+// Tune this against observed crashes; it is not an absolute real-world unit.
+const RAM_IMPACT_FORCE_THRESHOLD: f32 = 250.0;
+const RAM_IMPACT_FORCE_BOOST: f32 = 3000.0;
+
+/// React to physical hull impacts rather than raw sensor overlaps.
+/// The engine enriches a hull collision with its force and the active
+/// front/middle/back intersections between the same two ships.
+/// Game systems run before the PostGame physics step, so events arrive next frame.
 fn ship_collision_system(engine: &mut Engine) -> Result<()> {
     let collisions = engine
         .get_global_component_mut::<PhysicsWorldComponent>()?
@@ -269,50 +279,69 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // Snapshot player facing before borrowing components again for sound playback.
+    // Snapshot player entity, facing, and gamepad PlayerId.
     let mut players = Vec::new();
     for (entity, player, _) in
         engine.iterate_two_components_mut::<PlayerComponent, RigidBodyComponent>()?
     {
-        players.push((entity, player.flip));
+        players.push((entity, player.flip, player.id));
     }
 
-    let mut horns_to_play = Vec::new();
+    // (attacker, victim, collision force)
+    let mut horns_to_play: Vec<(EntityHandle, EntityHandle, f32)> = Vec::new();
+
     for collision in collisions {
         if collision.phase != CollisionPhase::Started {
             continue;
         }
-        if collision.a.scene != collision.b.scene {
+
+        let Some(force) = collision.force_magnitude else {
+            continue;
+        };
+
+        if force < RAM_IMPACT_FORCE_THRESHOLD || collision.a.scene != collision.b.scene {
             continue;
         }
 
-        let Some((_, a_flip)) = players
+        let Some((_, a_flip, _)) = players
             .iter()
-            .find(|(entity, _)| *entity == collision.a.entity)
-        else {
-            continue;
-        };
-        let Some((_, b_flip)) = players
-            .iter()
-            .find(|(entity, _)| *entity == collision.b.entity)
+            .find(|(entity, _, _)| *entity == collision.a.entity)
         else {
             continue;
         };
 
-        let part_a = effective_ship_section(&collision.a.part, *a_flip);
-        let part_b = effective_ship_section(&collision.b.part, *b_flip);
-
-        // Named sensor vs named sensor. Hull collisions remain physical but
-        // are deliberately not counted as zone-to-zone hits.
-        let (attacker, victim) = match (part_a, part_b) {
-            ("front", "back") => (collision.a.entity, collision.b.entity),
-            ("back", "front") => (collision.b.entity, collision.a.entity),
-            _ => continue,
+        let Some((_, b_flip, _)) = players
+            .iter()
+            .find(|(entity, _, _)| *entity == collision.b.entity)
+        else {
+            continue;
         };
 
-        println!("[SHIP HIT] bow of {attacker:?} hit stern of {victim:?}");
-        if !horns_to_play.contains(&attacker) {
-            horns_to_play.push(attacker);
+        for zones in &collision.zone_contacts {
+            let part_a = effective_ship_section(&zones.a.part, *a_flip);
+            let part_b = effective_ship_section(&zones.b.part, *b_flip);
+
+            let (attacker, victim) = match (part_a, part_b) {
+                ("front", "back") => (collision.a.entity, collision.b.entity),
+                ("back", "front") => (collision.b.entity, collision.a.entity),
+                _ => continue,
+            };
+
+            println!(
+                "[SHIP RAM] bow of {attacker:?} hit stern of {victim:?} \
+                 (force: {force:.1})"
+            );
+
+            if let Some((_, _, existing_force)) = horns_to_play
+                .iter_mut()
+                .find(|(entity, _, _)| *entity == attacker)
+            {
+                *existing_force = existing_force.max(force);
+            } else {
+                horns_to_play.push((attacker, victim, force));
+            }
+
+            break;
         }
     }
 
@@ -320,17 +349,58 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // A ship-to-ship hit also queues one of each effect event (subject to their 2 s cooldowns).
+    // Trigger visual effects.
     crate::effects::push_collision_effects(engine)?;
 
-    // Use the existing single-shot horn system. Never borrow the ECS audio
-    // component while still holding the PhysicsWorldComponent borrow.
-    for (entity, _player, audio) in
+    // Horn only on the attacking ship.
+    for (entity, _, audio) in
         engine.iterate_two_components_mut::<PlayerComponent, SingleShotAudioComponent>()?
     {
-        if horns_to_play.contains(&entity) {
-            schedule_blare(audio)?;
+        if horns_to_play
+            .iter()
+            .any(|(attacker, _, _)| *attacker == entity)
+        {
+            schedule_blare(audio, true)?;
         }
+    }
+
+    // Collect rumble requests for BOTH attacker and victim.
+    // Keep only the strongest impact per ship this frame.
+    let mut rumbles: Vec<(EntityHandle, f32)> = Vec::new();
+
+    for &(attacker, victim, force) in &horns_to_play {
+        for entity in [attacker, victim] {
+            if let Some((_, existing_force)) =
+                rumbles.iter_mut().find(|(handle, _)| *handle == entity)
+            {
+                *existing_force = existing_force.max(force);
+            } else {
+                rumbles.push((entity, force));
+            }
+        }
+    }
+
+    // Map EntityHandle -> PlayerId and send rumble.
+    let input = engine.get_global_component_mut::<InputComponent>()?;
+
+    for (entity, force) in rumbles {
+        let Some((_, _, player_id)) = players.iter().find(|(handle, _, _)| *handle == entity)
+        else {
+            continue;
+        };
+
+        let strength = if force > RAM_IMPACT_FORCE_BOOST {
+            1.0
+        } else {
+            0.5
+        };
+
+        input.enqueue_rumble(*player_id, strength, strength, 500);
+
+        println!(
+            "[RUMBLE] Player: {:?}, Force: {:.1}, Strength: {:.1}",
+            player_id, force, strength
+        );
     }
 
     Ok(())
@@ -419,7 +489,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
         .with_component(
             AudioSourceComponent::builder()
                 .sound_type(SoundType::Sound2D)
-                .volume(0.25)
+                .volume(BLARE_VOLUME)
                 .play_on_awake(false)
                 .build(),
         )
@@ -973,7 +1043,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
 
         if controls[player_component.id as usize].horn_blare {
-            schedule_blare(single_shot_audio)?;
+            schedule_blare(single_shot_audio, false)?;
         }
     }
 

@@ -4,8 +4,14 @@ use pill_engine::{define_component, game::*};
 // TODO:LIST
 // collision in ass and rumble
 // containers?
+// physics bump
+// screen shake dependent on thrust force
+// same with rumble
+// container collider fix
+// why with 10 containers we get such big FPS drops
 
 const BLARE_LENGTH: f32 = 5.0;
+pub const BLARE_VOLUME: f32 = 0.15;
 
 define_component!(SingleShotAudioComponent{
     active: bool,
@@ -13,6 +19,7 @@ define_component!(SingleShotAudioComponent{
     elapsed: f32,
     tracks: Vec<SoundHandle>, // TODO: could be kept in a global component
     chosen_track: usize,
+    amplify: bool,
 });
 
 define_component!(LoopingAudioComponent{
@@ -50,6 +57,7 @@ pub fn start(
                 elapsed: 0.0,
                 tracks: Vec::from([blare_1_handle, blare_2_handle, blare_3_handle]),
                 chosen_track: rand::random_range(0..3), // TODO: shoudl be settable later
+                amplify: false,
             },
         )?;
     }
@@ -99,7 +107,7 @@ pub fn start(
     Ok(())
 }
 
-pub fn schedule_blare(component: &mut SingleShotAudioComponent) -> Result<()> {
+pub fn schedule_blare(component: &mut SingleShotAudioComponent, amplify: bool) -> Result<()> {
     // don't restart those in progress
     if component.active {
         return Ok(());
@@ -108,6 +116,7 @@ pub fn schedule_blare(component: &mut SingleShotAudioComponent) -> Result<()> {
     component.active = true;
     component.timeout = BLARE_LENGTH;
     component.elapsed = 0.0;
+    component.amplify = amplify;
     component.chosen_track = rand::random_range(0..component.tracks.len());
     Ok(())
 }
@@ -129,6 +138,14 @@ pub fn single_shot_audio_system(engine: &mut Engine) -> Result<()> {
                     rand::random_range(0.90..1.15)
                 };
                 audio_source.set_speed(rand);
+
+                let volume = if audio_component.amplify {
+                    BLARE_VOLUME * 4.0
+                } else {
+                    BLARE_VOLUME
+                };
+                audio_source.set_volume(volume);
+
                 audio_component.timeout = BLARE_LENGTH * (1.0 / rand);
                 audio_source.play();
 
@@ -136,6 +153,7 @@ pub fn single_shot_audio_system(engine: &mut Engine) -> Result<()> {
             } else if audio_component.elapsed >= audio_component.timeout {
                 audio_source.stop();
                 audio_component.active = false;
+                audio_component.amplify = false;
             } else {
                 // update time
                 audio_component.elapsed += delta_time;

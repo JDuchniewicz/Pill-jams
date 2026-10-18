@@ -342,6 +342,12 @@ impl Engine {
                 RENDERING_SYSTEM.system_function,
                 RENDERING_SYSTEM.update_phase,
             )?;
+            #[cfg(not(target_arch = "wasm32"))]
+            self.system_manager.add_system(
+                HAPTICS_SYSTEM.name,
+                HAPTICS_SYSTEM.system_function,
+                HAPTICS_SYSTEM.update_phase,
+            )?;
         }
 
         #[cfg(feature = "physics")]

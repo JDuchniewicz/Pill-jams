@@ -100,6 +100,9 @@ pub mod game {
         RigidBodyComponent, RigidBodyType, SharedShape,
     };
 
+    #[cfg(feature = "physics")]
+    pub use rapier3d::prelude::ActiveEvents;
+
     #[cfg(feature = "ui")]
     pub use crate::ecs::EguiComponent;
     #[cfg(feature = "ui")]
