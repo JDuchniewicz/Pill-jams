@@ -1,6 +1,8 @@
 use pill_engine::{define_component, define_global_component, game::*};
 
 use crate::particle_system::ParticleSystemComponent;
+use crate::sounds::schedule_blare;
+use crate::sounds::SingleShotAudioComponent;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 
@@ -8,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 define_component!(PlayerComponent {
     id: PlayerId,
+    last_thrust_direction: Vector3f,
+    air_time: f32,
     flip: i32
 });
 
@@ -38,6 +42,11 @@ const DECK_LOCAL_Y: f32 = (0.5 - 111.0 / SHIP_ART_SIZE) * SHIP_SPRITE_SIZE;
 // SpriteRenderer still draws the ORIGINAL 20x20 texture; these affect physics only.
 const HULL_CONTACT_MARGIN_X: f32 = 1.08;
 const HULL_CONTACT_MARGIN_Y: f32 = 1.18;
+const AIR_DRAG_DECEL: f32 = 0.5; // deceleration factor when ship is in air
+
+// Downward thrust multiplier. Must be large enough to beat the buoyancy force
+// (params.buoyancy_strength per unit of submersion) so the ship can dive.
+const DIVE_THRUST_MULTIPLIER: f32 = 10.0;
 
 // Keep the total mass at `ship_mass`, but concentrate most of it near the ship
 // origin (below the painted hull), rather than the centroid of the raised shape.
@@ -175,7 +184,7 @@ fn ship_hull_shape(params: &PlayerPhysicsParams) -> SharedShape {
     ])
 }
 
-pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
+pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<EntityHandle>> {
     engine.register_component::<RigidBodyComponent>(active_scene)?;
     engine.register_component::<ColliderComponent>(active_scene)?;
     engine.register_component::<PlayerComponent>(active_scene)?;
@@ -208,7 +217,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         ResourceLoader::Path("textures/foam_particle.png".into()),
     ))?;
 
-    engine
+    let player1 = engine
         .build_entity(active_scene)
         .with_component(
             TransformComponent::builder()
@@ -249,12 +258,21 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(PlayerComponent {
             id: PlayerId::Player1,
             flip: 1,
+            last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
+            air_time: 0.0,
         })
+        .with_component(
+            AudioSourceComponent::builder()
+                .sound_type(SoundType::Sound2D)
+                .volume(0.25)
+                .play_on_awake(false)
+                .build(),
+        )
         .with_component(ParticleSystemComponent::new(foam_texture_handle))
         .build();
 
     // Player 2 is a camera-facing sprite; the transform drives its world position.
-    engine
+    let player2 = engine
         .build_entity(active_scene)
         .with_component(
             TransformComponent::builder()
@@ -295,7 +313,16 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(PlayerComponent {
             id: PlayerId::Player2,
             flip: 1,
+            last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
+            air_time: 0.0,
         })
+        .with_component(
+            AudioSourceComponent::builder()
+                .sound_type(SoundType::Sound2D)
+                .volume(0.25)
+                .play_on_awake(false)
+                .build(),
+        )
         .with_component(ParticleSystemComponent::new(foam_texture_handle))
         .build();
 
@@ -307,20 +334,25 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
             0.0,
         ));
 
-    Ok(())
+    Ok(Vec::from([player1, player2]))
 }
 
 #[derive(Clone, Copy, Default)]
 struct ShipControls {
     movement_x: f32,
+    movement_y: f32,
     drop_bomb: bool,
+    horn_blare: bool,
 }
 
 fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as usize]> {
     let input = engine.get_global_component::<InputComponent>()?;
     let keyboard_x =
         (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
+    let keyboard_y =
+        (input.get_key(KeyboardKey::KeyS) as i32 - input.get_key(KeyboardKey::KeyW) as i32) as f32;
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
+    let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
     Ok(std::array::from_fn(|i| {
         let id = PlayerId::try_from(i as u8).unwrap();
@@ -328,8 +360,12 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
             // Keyboard is reserved for Player 1, not both ships.
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
+            movement_y: input.get_gamepad_axis(id, GamepadAxis::LeftStickY)
+                + if i == 0 { keyboard_y } else { 0.0 },
             drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::A)
                 || (i == 0 && keyboard_bomb),
+            horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
+                || (i == 0 && keyboard_blare),
         }
     }))
 }
@@ -371,6 +407,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         (guard.clone(), emission_heights)
     };
+    let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
 
     let hull_points = ship_buoyancy_points(&params);
     let controls = read_ship_controls(engine)?;
@@ -382,10 +419,23 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         engine.iterate_two_components_mut::<RigidBodyComponent, PlayerComponent>()?
     {
         if let Some(handle) = rb.get_rigid_body_handle() {
-            let input_x = controls[player.id as usize].movement_x;
-            ships.push((handle, player.id as usize, input_x));
+            let player_index = player.id as usize;
+            let input_x = controls[player_index].movement_x;
+            let input_y = controls[player_index].movement_y;
+            ships.push((
+                handle,
+                player_index,
+                input_x,
+                input_y,
+                player.air_time,
+                player.last_thrust_direction,
+            ));
         }
     }
+
+    // New per-player values, written back to `PlayerComponent` after the physics borrow ends.
+    let mut next_air_time = [0.0f32; NUM_PLAYERS as usize];
+    let mut next_thrust_direction = [Vector3f::ZERO; NUM_PLAYERS as usize];
 
     // Read body positions first. This borrow of the physics world must end before
     // querying the water surface through the engine.
@@ -393,7 +443,11 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     {
         let physics = engine.get_global_component::<PhysicsWorldComponent>()?;
 
-        for (handle, player_index, input_x) in ships {
+        for (handle, player_index, input_x, input_y, air_time, last_thrust_direction) in ships {
+            // Preserve the previous state if this body is missing from the physics world.
+            next_air_time[player_index] = air_time;
+            next_thrust_direction[player_index] = last_thrust_direction;
+
             let Some(body) = physics.rigid_body_set.get(handle) else {
                 continue;
             };
@@ -402,6 +456,9 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 handle,
                 player_index,
                 input_x,
+                input_y,
+                air_time,
+                last_thrust_direction,
                 body.translation(),
                 body.rotation(),
             ));
@@ -410,7 +467,17 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
     // Compute buoyancy from the current water height
     let mut ship_forces = Vec::with_capacity(ship_states.len());
-    for &(handle, player_index, input_x, player_position, player_rotation) in &ship_states {
+    for (
+        handle,
+        player_index,
+        input_x,
+        input_y,
+        air_time,
+        last_thrust_direction,
+        player_position,
+        player_rotation,
+    ) in ship_states
+    {
         // store water samples at points
         let mut water_samples = [(0.0f32, 0.0f32); 3];
         // calculate the force triplet
@@ -446,6 +513,9 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             handle,
             player_index,
             input_x,
+            input_y,
+            air_time,
+            last_thrust_direction,
             point_buoyancy_forces,
             slope,
             water_level,
@@ -459,8 +529,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         let mut heights = emission_heights
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for &(_, player_index, _, _, _, _, height) in &ship_forces {
-            heights[player_index] = height;
+        for entry in &ship_forces {
+            heights[entry.1] = entry.9;
         }
     }
     let expected_hull_shape = ship_hull_shape(&params);
@@ -471,8 +541,18 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     {
         let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-        for (handle, player_index, input_x, point_buoyancy_forces, slope, water_level, _) in
-            ship_forces
+        for (
+            handle,
+            player_index,
+            input_x,
+            input_y,
+            mut air_time,
+            mut last_thrust_direction,
+            point_buoyancy_forces,
+            slope,
+            water_level,
+            _,
+        ) in ship_forces
         {
             let Some(body) = physics.rigid_body_set.get_mut(handle) else {
                 continue;
@@ -550,13 +630,49 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             // Apply thrust along X
             let thrusting = input_x.abs() > params.input_deadzone && in_water;
-            if thrusting {
-                body.add_force(
-                    Vector3f::new(-input_x * params.thrust_force, 0.0, 0.0),
-                    true,
-                );
-            }
             emitter_states[player_index] = (thrusting, input_x, water_level);
+
+            // Horizontal thrust is only available in water. Vertical thrust is
+            // DOWNWARD only: holding W (or pushing the stick up) must not lift the
+            // ship, but holding S can drive it under the surface, beating buoyancy.
+            // Upward motion comes exclusively from buoyancy, which still allows jumps.
+            let mut thrust = Vector3f::ZERO;
+            if in_water && input_x.abs() > params.input_deadzone {
+                thrust.x = -input_x;
+            }
+            if input_y > params.input_deadzone {
+                thrust.y = -input_y * DIVE_THRUST_MULTIPLIER;
+            }
+
+            if thrust != Vector3f::ZERO {
+                body.add_force(thrust * params.thrust_force, true);
+                last_thrust_direction = thrust.normalize_or_zero();
+            }
+
+            // Airborne: no thrust, just coasting. Drag ramps with the time spent in
+            // the air, so the ship keeps its direction but bleeds off speed.
+            if in_water {
+                air_time = 0.0;
+            } else {
+                air_time += delta_time;
+
+                let velocity = body.linvel();
+                let horizontal_speed = velocity.x.abs();
+
+                if horizontal_speed > 0.0 {
+                    // AIR_DRAG_DECEL is a fraction of thrust per second airborne;
+                    // convert it to an acceleration using the body's mass.
+                    let deceleration =
+                        params.thrust_force * AIR_DRAG_DECEL * air_time / body.mass().max(0.001);
+                    let delta_v = (deceleration * delta_time).min(horizontal_speed);
+                    let new_velocity_x = velocity.x - velocity.x.signum() * delta_v;
+
+                    body.set_linvel(Vector3f::new(new_velocity_x, velocity.y, velocity.z), true);
+                }
+            }
+
+            next_air_time[player_index] = air_time;
+            next_thrust_direction[player_index] = last_thrust_direction;
 
             let submersion = submerged_points as f32 / point_buoyancy_forces.len() as f32;
             // Buoyancy pushes up while the player is below the water surface
@@ -622,15 +738,23 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
-    for (_, transform_component, player_component) in
-        engine.iterate_two_components_mut::<TransformComponent, PlayerComponent>()?
+    for (_, transform_component, player_component, single_shot_audio) in
+        engine.iterate_three_components_mut::<TransformComponent, PlayerComponent, SingleShotAudioComponent>()?
     {
-        if controls[player_component.id as usize].drop_bomb {
+        let player_index = player_component.id as usize;
+        player_component.air_time = next_air_time[player_index];
+        player_component.last_thrust_direction = next_thrust_direction[player_index];
+
+        if controls[player_index].drop_bomb {
             //        add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
             bomb_positions.push((
                 transform_component.position.x,
                 transform_component.position.y,
             ));
+        }
+
+        if controls[player_component.id as usize].horn_blare {
+            schedule_blare(single_shot_audio)?;
         }
     }
 

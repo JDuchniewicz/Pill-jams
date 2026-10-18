@@ -108,7 +108,7 @@ impl AudioSourceComponent {
     pub fn set_sound(&mut self, sound_handle: SoundHandle) {
         self.sound_handle = Some(sound_handle);
         if self.sink_handle.is_some() {
-            self.post_deferred_update_request(DEFERRED_REQUEST_VARIANT_SET_VOLUME);
+            self.post_deferred_update_request(DEFERRED_REQUEST_VARIANT_SET_SOUND);
         }
     }
 
@@ -139,9 +139,9 @@ impl AudioSourceComponent {
     }
 
     pub fn stop(&mut self) {
-        if self.sink_handle.is_some() {
-            self.post_deferred_update_request(DEFERRED_REQUEST_VARIANT_STOP_SOUND);
-        }
+        // Queue stop even if the sink is not assigned yet: an earlier queued play
+        // can assign one before this request is processed.
+        self.post_deferred_update_request(DEFERRED_REQUEST_VARIANT_STOP_SOUND);
     }
 
     // Give the handle (index) back to the AudioManagerComponent
@@ -150,24 +150,20 @@ impl AudioSourceComponent {
         self.sink_handle.take()
     }
 
-    // Stop playing and return sink to pool
+    // Stop and release the sink exactly once. Deferred requests can outlive a
+    // completed one-shot, so do not assume a handle is still assigned.
     fn stop_playing(&mut self, engine: &mut Engine) -> Result<()> {
-        let audio_manager = engine.get_global_component_mut::<AudioManagerComponent>()?;
         self.is_playing = false;
-        match self.sound_type {
-            SoundType::Sound3D => {
-                audio_manager
-                    .get_spatial_sink(self.sink_handle.unwrap())
-                    .stop();
-            }
-            SoundType::Sound2D => {
-                audio_manager
-                    .get_ambient_sink(self.sink_handle.unwrap())
-                    .stop();
-            }
-        }
-        audio_manager.return_sink(self.sink_handle.take().unwrap(), &self.sound_type);
+        let Some(sink_handle) = self.sink_handle.take() else {
+            return Ok(());
+        };
 
+        let audio_manager = engine.get_global_component_mut::<AudioManagerComponent>()?;
+        match self.sound_type {
+            SoundType::Sound3D => audio_manager.get_spatial_sink(sink_handle).stop(),
+            SoundType::Sound2D => audio_manager.get_ambient_sink(sink_handle).stop(),
+        }
+        audio_manager.return_sink(sink_handle, &self.sound_type);
         Ok(())
     }
 
@@ -228,68 +224,75 @@ impl Component for AudioSourceComponent {
     fn deferred_update(&mut self, engine: &mut Engine, request: usize) -> Result<()> {
         match request {
             DEFERRED_REQUEST_VARIANT_SET_SOUND => {
-                // Check if sound handle is valid
-                engine
-                    .get_resource::<Sound>(&self.sound_handle.unwrap())
-                    .context(format!(
+                if let Some(handle) = self.sound_handle {
+                    engine.get_resource::<Sound>(&handle).context(format!(
                         "Setting {} {} failed",
                         "Component".general_object_style(),
                         "Sound".specific_object_style()
                     ))?;
-
-                // Stop playing
+                }
+                // A new sound replaces the current one; it does not append to it.
                 self.stop_playing(engine)?;
             }
             DEFERRED_REQUEST_VARIANT_SET_VOLUME => {
-                let audio_manager = engine.get_global_component::<AudioManagerComponent>()?;
-                match self.sound_type {
-                    SoundType::Sound3D => audio_manager
-                        .get_spatial_sink(self.sink_handle.unwrap())
-                        .set_volume(self.volume),
-                    SoundType::Sound2D => audio_manager
-                        .get_ambient_sink(self.sink_handle.unwrap())
-                        .set_volume(self.volume),
+                if let Some(handle) = self.sink_handle {
+                    let audio_manager = engine.get_global_component::<AudioManagerComponent>()?;
+                    match self.sound_type {
+                        SoundType::Sound3D => audio_manager
+                            .get_spatial_sink(handle)
+                            .set_volume(self.volume),
+                        SoundType::Sound2D => audio_manager
+                            .get_ambient_sink(handle)
+                            .set_volume(self.volume),
+                    }
                 }
             }
             DEFERRED_REQUEST_VARIANT_PLAY_SOUND => {
-                // Get data from sound resource
-                let sound_handle = self.sound_handle.unwrap();
-                let sound = engine.get_resource::<Sound>(&sound_handle)?;
-                let sound_data = sound.sound_data.as_ref().unwrap().get_source_sound();
+                let Some(sound_handle) = self.sound_handle else {
+                    return Ok(());
+                };
 
-                // Get free sink, set its volume and play
+                // Replaying an occupied source must not leak the old sink.
+                self.stop_playing(engine)?;
+
+                let sound_data = engine
+                    .get_resource::<Sound>(&sound_handle)?
+                    .sound_data
+                    .as_ref()
+                    .expect("Initialized Sound must contain sound data")
+                    .get_source_sound();
+
                 let audio_manager = engine.get_global_component_mut::<AudioManagerComponent>()?;
-                if let Some(sink_handle) = audio_manager.get_free_sink_handle(&self.sound_type) {
-                    self.sink_handle = Some(sink_handle);
-
+                if let Some(handle) = audio_manager.get_free_sink_handle(&self.sound_type) {
                     match self.sound_type {
                         SoundType::Sound2D => {
-                            let sink = audio_manager.get_ambient_sink(sink_handle);
+                            let sink = audio_manager.get_ambient_sink(handle);
                             sink.append(sound_data);
                             sink.set_volume(self.volume);
                             sink.play();
                         }
                         SoundType::Sound3D => {
-                            let sink = audio_manager.get_spatial_sink(sink_handle);
+                            let sink = audio_manager.get_spatial_sink(handle);
                             sink.append(sound_data);
                             sink.set_volume(self.volume);
                             sink.play();
                         }
                     }
+                    self.sink_handle = Some(handle);
                     self.is_playing = true;
                 } else {
+                    self.is_playing = false;
                     warn!(LogContext::ECS => "Cannot play sound, max concurrent {} sound count reached", get_enum_variant_type_name(&self.sound_type));
                 }
             }
             DEFERRED_REQUEST_VARIANT_PAUSE_SOUND => {
-                let audio_manager = engine.get_global_component::<AudioManagerComponent>()?;
-                match self.sound_type {
-                    SoundType::Sound3D => audio_manager
-                        .get_spatial_sink(self.sink_handle.unwrap())
-                        .pause(),
-                    SoundType::Sound2D => audio_manager
-                        .get_ambient_sink(self.sink_handle.unwrap())
-                        .pause(),
+                if let Some(handle) = self.sink_handle {
+                    let audio_manager = engine.get_global_component::<AudioManagerComponent>()?;
+                    match self.sound_type {
+                        SoundType::Sound3D => audio_manager.get_spatial_sink(handle).pause(),
+                        SoundType::Sound2D => audio_manager.get_ambient_sink(handle).pause(),
+                    }
+                    self.is_playing = false;
                 }
             }
             DEFERRED_REQUEST_VARIANT_STOP_SOUND => {
@@ -299,7 +302,6 @@ impl Component for AudioSourceComponent {
                 panic!("Critical: Processing deferred update request with value {} in {} failed. Handling is not implemented", request, get_type_name::<Self>().specific_object_style());
             }
         }
-
         Ok(())
     }
 

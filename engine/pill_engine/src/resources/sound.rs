@@ -7,11 +7,12 @@ use crate::{
 use pill_core::{get_type_name, EngineError, PillSlotMapKey, PillStyle, PillTypeMapKey};
 
 use pill_core::{ErrorContext, Result};
-use rodio::Decoder;
+use rodio::{Decoder, Source};
 use std::{
     fs::File,
     io::{Cursor, Read},
     path::PathBuf,
+    time::Duration,
 };
 
 pill_core::define_new_pill_slotmap_key! {
@@ -34,6 +35,11 @@ impl Sound {
             path,
             sound_data: None,
         }
+    }
+
+    pub fn duration(&self) -> Option<Duration> {
+        let sound_data = self.sound_data.as_ref()?;
+        Some(sound_data.get_duration())
     }
 }
 
@@ -125,5 +131,20 @@ impl SoundData {
 
         // Return decoded bytes as the sound, which can be played
         Decoder::new(Cursor::new(sound_source)).unwrap()
+    }
+
+    pub fn get_duration(&self) -> Duration {
+        let decoder = self.get_source_sound();
+
+        let sample_rate = decoder.sample_rate() as u64;
+        let channels = decoder.channels() as u64;
+
+        if let Some(duration) = decoder.total_duration() {
+            return duration;
+        }
+
+        let sample_count = decoder.count() as u64;
+
+        Duration::from_secs_f64(sample_count as f64 / (sample_rate * channels) as f64)
     }
 }
