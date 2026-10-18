@@ -1,3 +1,4 @@
+mod assets;
 mod background_pass;
 mod cartoon_pass;
 mod container;
@@ -7,6 +8,7 @@ mod game;
 mod particle_system;
 mod player;
 mod post_process;
+#[cfg(not(target_arch = "wasm32"))]
 mod sounds;
 mod visuals;
 mod water;

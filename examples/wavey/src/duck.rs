@@ -21,7 +21,7 @@ pub fn start(engine: &mut Engine, _active_scene: SceneHandle) -> Result<()> {
     let texture = engine.add_resource::<Texture>(Texture::new(
         "duck",
         TextureType::Color,
-        ResourceLoader::Path("textures/duck.png".into()),
+        crate::assets::texture("duck"),
     ))?;
 
     engine.add_global_component(DuckSpawnerComponent { texture })?;

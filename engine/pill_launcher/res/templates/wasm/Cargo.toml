@@ -21,3 +21,8 @@ crate-type = ["cdylib", "rlib"]
 pill_web = { path = "../pill_web" }
 
 wasm-bindgen = "0.2"
+
+# getrandom 0.4 refuses to build for wasm32-unknown-unknown unless the `wasm_js` feature is on.
+# Declaring it here (even though we do not call it directly) unifies the feature for every crate
+# in the graph, e.g. the `rand` copy pulled in by the game.
+getrandom = { version = "0.4", features = ["wasm_js"] }

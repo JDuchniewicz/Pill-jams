@@ -40,9 +40,12 @@ impl PillGame for Game {
         engine.register_component::<CartoonComponent>(active_scene)?;
         engine.register_component::<CameraComponent>(active_scene)?;
 
-        // Register game-specific components
-        engine.register_component::<AudioListenerComponent>(active_scene)?;
-        engine.register_component::<AudioSourceComponent>(active_scene)?;
+        // Register game-specific components (audio is native-only)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            engine.register_component::<AudioListenerComponent>(active_scene)?;
+            engine.register_component::<AudioSourceComponent>(active_scene)?;
+        }
 
         // --- Effect events (screenshake, vignette, aberration, slow motion) ---
         // Started first so its scaled delta time reaches every other game system.
@@ -56,7 +59,10 @@ impl PillGame for Game {
         let players = crate::player::start(engine, active_scene).unwrap();
         crate::duck::start(engine, active_scene)?;
         crate::container::start(engine, active_scene)?;
+        #[cfg(not(target_arch = "wasm32"))]
         crate::sounds::start(engine, active_scene, players)?;
+        #[cfg(target_arch = "wasm32")]
+        let _ = players;
 
         // Add render passes
         engine.add_render_pass(Box::new(CartoonPass::new()))?;

@@ -1,9 +1,14 @@
 use pill_engine::{define_component, define_global_component, game::*};
 
 use crate::particle_system::ParticleSystemComponent;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::sounds::schedule_blare;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::sounds::SingleShotAudioComponent;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::sounds::BLARE_VOLUME;
+#[cfg(target_arch = "wasm32")]
+const BLARE_VOLUME: f32 = 0.15;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 use crate::water_floating::WaterFloatingComponent;
@@ -352,7 +357,8 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
     // Trigger visual effects.
     crate::effects::push_collision_effects(engine)?;
 
-    // Horn only on the attacking ship.
+    // Horn only on the attacking ship (audio is native-only).
+    #[cfg(not(target_arch = "wasm32"))]
     for (entity, _, audio) in
         engine.iterate_two_components_mut::<PlayerComponent, SingleShotAudioComponent>()?
     {
@@ -438,12 +444,12 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
     let ship_texture_handle = engine.add_resource::<Texture>(Texture::new(
         "ship_test",
         TextureType::Color,
-        ResourceLoader::Path("textures/ship.png".into()),
+        crate::assets::texture("ship"),
     ))?;
     let foam_texture_handle = engine.add_resource::<Texture>(Texture::new(
         "foam_particle",
         TextureType::Color,
-        ResourceLoader::Path("textures/foam_particle.png".into()),
+        crate::assets::texture("foam_particle"),
     ))?;
 
     let player1 = engine
@@ -486,15 +492,10 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             dive_was_held: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
-        .with_component(
-            AudioSourceComponent::builder()
-                .sound_type(SoundType::Sound2D)
-                .volume(BLARE_VOLUME)
-                .play_on_awake(false)
-                .build(),
-        )
         .with_component(ParticleSystemComponent::new(foam_texture_handle))
         .build();
+
+    add_audio_source(engine, active_scene, player1, BLARE_VOLUME)?;
 
     // Player 2 is a camera-facing sprite; the transform drives its world position.
     let player2 = engine
@@ -537,15 +538,10 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             dive_was_held: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
-        .with_component(
-            AudioSourceComponent::builder()
-                .sound_type(SoundType::Sound2D)
-                .volume(0.25)
-                .play_on_awake(false)
-                .build(),
-        )
         .with_component(ParticleSystemComponent::new(foam_texture_handle))
         .build();
+
+    add_audio_source(engine, active_scene, player2, 0.25)?;
 
     engine
         .get_global_component_mut::<PhysicsWorldComponent>()?
@@ -556,6 +552,36 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
         ));
 
     Ok(Vec::from([player1, player2]))
+}
+
+/// Adds the 2D audio source used by the horn to a ship. Audio is native-only, so this is a no-op
+/// on the wasm build.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_audio_source(
+    engine: &mut Engine,
+    scene: SceneHandle,
+    entity: EntityHandle,
+    volume: f32,
+) -> Result<()> {
+    engine.add_component_to_entity(
+        scene,
+        entity,
+        AudioSourceComponent::builder()
+            .sound_type(SoundType::Sound2D)
+            .volume(volume)
+            .play_on_awake(false)
+            .build(),
+    )
+}
+
+#[cfg(target_arch = "wasm32")]
+fn add_audio_source(
+    _engine: &mut Engine,
+    _scene: SceneHandle,
+    _entity: EntityHandle,
+    _volume: f32,
+) -> Result<()> {
+    Ok(())
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1025,8 +1051,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
-    for (_, transform_component, player_component, single_shot_audio) in
-        engine.iterate_three_components_mut::<TransformComponent, PlayerComponent, SingleShotAudioComponent>()?
+    for (_, transform_component, player_component) in
+        engine.iterate_two_components_mut::<TransformComponent, PlayerComponent>()?
     {
         let player_index = player_component.id as usize;
         player_component.air_time = next_air_time[player_index];
@@ -1035,13 +1061,18 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         player_component.dive_was_held = next_dive_was_held[player_index];
 
         if controls[player_index].drop_bomb {
-            //        add_bomb(engine, transform_component.position.x, transform_component.position.y)?;
             bomb_positions.push((
                 transform_component.position.x,
                 transform_component.position.y,
             ));
         }
+    }
 
+    // Horn: audio is native-only, so the wasm build simply skips it.
+    #[cfg(not(target_arch = "wasm32"))]
+    for (_, player_component, single_shot_audio) in
+        engine.iterate_two_components_mut::<PlayerComponent, SingleShotAudioComponent>()?
+    {
         if controls[player_component.id as usize].horn_blare {
             schedule_blare(single_shot_audio, false)?;
         }

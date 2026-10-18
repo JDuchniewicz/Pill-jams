@@ -77,27 +77,27 @@ fn visuals_system(engine: &mut Engine) -> Result<()> {
         }
     }
 
-    if let Some((center, right, up)) = camera_frame {
-        // Rectangle corners: (-100, -100), (-100, 100), (100, 100), (100, -100)
-        let corner = |x: f32, y: f32| center + right * x + up * y;
-        let corners = [
-            corner(-RECTANGLE_HALF_EXTENT, -RECTANGLE_HALF_EXTENT),
-            corner(-RECTANGLE_HALF_EXTENT, RECTANGLE_HALF_EXTENT),
-            corner(RECTANGLE_HALF_EXTENT, RECTANGLE_HALF_EXTENT),
-            corner(RECTANGLE_HALF_EXTENT, -RECTANGLE_HALF_EXTENT),
-        ];
-
-        let style = PrimitiveStyle::overlay(Color::new(1.0, 0.7, 0.1));
-        for i in 0..4 {
-            engine.draw_line(corners[i], corners[(i + 1) % 4], style)?;
-        }
-
-        // Static red points at the rectangle corners.
-        let point_style = PrimitiveStyle::overlay(Color::new(1.0, 0.0, 0.0));
-        for corner in corners {
-            engine.draw_point(corner, point_style)?;
-        }
-    }
+    //if let Some((center, right, up)) = camera_frame {
+    //    // Rectangle corners: (-100, -100), (-100, 100), (100, 100), (100, -100)
+    //    let corner = |x: f32, y: f32| center + right * x + up * y;
+    //    let corners = [
+    //        corner(-RECTANGLE_HALF_EXTENT, -RECTANGLE_HALF_EXTENT),
+    //        corner(-RECTANGLE_HALF_EXTENT, RECTANGLE_HALF_EXTENT),
+    //        corner(RECTANGLE_HALF_EXTENT, RECTANGLE_HALF_EXTENT),
+    //        corner(RECTANGLE_HALF_EXTENT, -RECTANGLE_HALF_EXTENT),
+    //    ];
+    //
+    //    let style = PrimitiveStyle::overlay(Color::new(1.0, 0.7, 0.1));
+    //    for i in 0..4 {
+    //        engine.draw_line(corners[i], corners[(i + 1) % 4], style)?;
+    //    }
+    //
+    //    // Static red points at the rectangle corners.
+    //    let point_style = PrimitiveStyle::overlay(Color::new(1.0, 0.0, 0.0));
+    //    for corner in corners {
+    //        engine.draw_point(corner, point_style)?;
+    //    }
+    //}
 
     Ok(())
 }
