@@ -97,7 +97,7 @@ pub struct PlayerPhysicsParams {
     pub particle_surface_center: f32,
     /// Height range above `particle_surface_center` over which the particle opacity fades out.
     pub particle_surface_band: f32,
-    /// How far below the water the emission point must be before particles turn red/faint. A
+    /// How far below the water the  point must be before particles turn red/faint. A
     /// floating ship sits slightly below the water, so this offset keeps it in the green
     /// "on the surface" state while normal dives go red.
     pub particle_underwater_depth: f32,
@@ -917,8 +917,15 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     Ok(())
 }
 
+/// Brightness multiplier applied to the part of a sprite that is below the waterline.
+const SUBMERGE_FACTOR: f32 = 0.5;
+/// Brightness multiplier once the sprite is completely under the surface.
+const DEEP_SUBMERGE_FACTOR: f32 = 0.2;
+
 /// Keeps each sprite's waterline in sync with the procedural water surface, so the part of the
-/// sprite below the mesh's top edge is drawn at `submerge_factor` brightness.
+/// sprite below the mesh's top edge is drawn at `submerge_factor` brightness. The factor also
+/// darkens with depth: a sprite only touching the water keeps `SUBMERGE_FACTOR`, while a fully
+/// submerged one drops to `DEEP_SUBMERGE_FACTOR`.
 fn submerge_system(engine: &mut Engine) -> Result<()> {
     // Sampling the water surface borrows the engine immutably, so collect positions first.
     let mut sample_points: Vec<(EntityHandle, f32)> = Vec::new();
@@ -940,11 +947,19 @@ fn submerge_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    for (entity, _, sprite) in
+    for (entity, transform, sprite) in
         engine.iterate_two_components_mut::<TransformComponent, SpriteRenderingComponent>()?
     {
         if let Some((_, height)) = waterlines.iter().find(|(handle, _)| *handle == entity) {
-            sprite.set_submerge_height(*height);
+            // How much of the sprite's vertical extent sits below the waterline (0 = dry,
+            // 1 = completely under water).
+            let half_height = sprite.size.y * 0.5 * transform.scale.y.abs();
+            let bottom = transform.position.y - half_height;
+            let span = (2.0 * half_height).max(0.0001);
+            let submerged = ((height - bottom) / span).clamp(0.0, 1.0);
+            let factor = SUBMERGE_FACTOR + (DEEP_SUBMERGE_FACTOR - SUBMERGE_FACTOR) * submerged;
+
+            sprite.set_submerge(factor, *height);
         }
     }
 

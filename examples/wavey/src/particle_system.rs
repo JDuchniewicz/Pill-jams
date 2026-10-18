@@ -92,7 +92,7 @@ impl ParticleSystemComponent {
     pub fn new(texture: TextureHandle) -> Self {
         Self {
             texture,
-            rate_per_second: 10.0,
+            rate_per_second: 20.0,
             lifetime: 0.8,
             initial_force: Vector3f::new(15.0, 0.0, 0.0),
             gravity: 5.0,
