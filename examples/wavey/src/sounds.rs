@@ -1,4 +1,4 @@
-use crate::player::PlayerComponent;
+use crate::{player::PlayerComponent, water_floating::WaterFloatingComponent};
 use pill_engine::{define_component, game::*};
 
 // TODO:LIST
@@ -115,21 +115,21 @@ pub fn schedule_blare(component: &mut SingleShotAudioComponent) -> Result<()> {
 pub fn single_shot_audio_system(engine: &mut Engine) -> Result<()> {
     // process all tracks, find new scheduled
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
-    for (_, audio_component, audio_source, player_component) in
-        engine.iterate_three_components_mut::<SingleShotAudioComponent, AudioSourceComponent, PlayerComponent>()?
+    for (_, audio_component, audio_source, floating_component) in
+        engine.iterate_three_components_mut::<SingleShotAudioComponent, AudioSourceComponent, WaterFloatingComponent>()?
     {
         if audio_component.active {
             // start the new track
             if audio_component.elapsed == 0.0 {
                 audio_source.set_sound(audio_component.tracks[audio_component.chosen_track]);
                 // If player under the water, lower the pitch
-                let rand = if player_component.under_water {
-                    rand::random_range(0.35..0.55)
+                let rand = if floating_component.is_fully_submerged() {
+                    rand::random_range(0.75..0.85)
                 } else {
-                    rand::random_range(0.85..1.15)
+                    rand::random_range(0.90..1.15)
                 };
                 audio_source.set_speed(rand);
-                audio_component.timeout = BLARE_LENGTH * rand;
+                audio_component.timeout = BLARE_LENGTH * (1.0 / rand);
                 audio_source.play();
 
                 audio_component.elapsed += delta_time;
