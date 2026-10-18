@@ -32,7 +32,7 @@ pub struct WaterLookParams {
     /// Lower bound of the (inverted) depth band where foam appears: higher values are nearer the
     /// surface. The band fades in with `smoothstep` up to the surface.
     pub foam_depth: f32,
-    /// Multiplier applied to the second-UV value (horizontal velocity) to scale how much foam
+    /// Multiplier applied to the second-UV value (vertical velocity) to scale how much foam
     /// the motion produces — foam is multiplied by the UV value rather than thresholded by it.
     pub foam_intensity: f32,
 }
@@ -46,8 +46,8 @@ impl Default for WaterLookParams {
             highlight_bottom: [0.25, 0.60, 0.80],
             highlight_threshold: 0.95,
             foam_color: [0.95, 0.98, 1.0],
-            foam_depth: 0.96,
-            foam_intensity: 0.05,
+            foam_depth: 0.98,
+            foam_intensity: 0.03,
         }
     }
 }

@@ -187,8 +187,8 @@ impl PillGame for Game {
                                     .text("Foam depth"),
                             );
                             ui.add(
-                                egui::Slider::new(&mut water_look.foam_intensity, 0.0..=2.0)
-                                    .step_by(0.05)
+                                egui::Slider::new(&mut water_look.foam_intensity, 0.0..=1.0)
+                                    .step_by(0.02)
                                     .text("Foam intensity ×UV2"),
                             );
                         });

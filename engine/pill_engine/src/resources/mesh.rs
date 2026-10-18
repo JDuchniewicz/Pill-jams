@@ -1029,4 +1029,28 @@ mod polygon_tests {
         ])
         .is_err());
     }
+
+    #[test]
+    fn quad_strip_uv2_is_one_value_per_vertex() {
+        let top = [
+            Vector2f::new(0.0, 0.0),
+            Vector2f::new(1.0, 1.0),
+            Vector2f::new(2.0, 0.0),
+        ];
+        let bottom = [
+            Vector2f::new(0.0, -1.0),
+            Vector2f::new(1.0, -1.0),
+            Vector2f::new(2.0, -1.0),
+        ];
+        let uv2_top = [[1.0, 0.0], [2.0, 0.0], [3.0, 0.0]];
+        let mesh = MeshData::from_quad_strip_with_top_uv2(&top, &bottom, &uv2_top).unwrap();
+
+        assert_eq!(mesh.vertices.len(), 6);
+        assert_eq!(mesh.texture_coordinates_2.len(), mesh.vertices.len());
+        // Top-row vertices keep their value, bottom-row vertices are zero.
+        assert_eq!(&mesh.texture_coordinates_2[..3], &uv2_top);
+        assert!(mesh.texture_coordinates_2[3..]
+            .iter()
+            .all(|value| *value == [0.0, 0.0]));
+    }
 }

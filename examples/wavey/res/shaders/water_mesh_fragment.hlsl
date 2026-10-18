@@ -33,7 +33,7 @@ struct FragmentInput {
     [[vk::location(0)]] float2 uv       : TEXCOORD0;
     [[vk::location(1)]] float  world_x  : TEXCOORD1;
     [[vk::location(2)]] float  world_y  : TEXCOORD2;
-    // Second UV set (water point horizontal velocity); available for effects
+    // Second UV set (water point vertical velocity); available for effects
     [[vk::location(3)]] float2 velocity : TEXCOORD3;
                          float4 sv_position : SV_POSITION;
 };
@@ -77,7 +77,7 @@ float4 fs_main(FragmentInput input) : SV_Target {
     float overlay = smoothstep(water_look.params.x, 1.0, height);
     float3 color = lerp(base, overlay_gradient, overlay);
 
-    // Foam: a smooth band near the surface, scaled by the second UV set (horizontal velocity), so
+    // Foam: a smooth band near the surface, scaled by the second UV set (vertical velocity), so
     // stronger motion produces more foam instead of a hard on/off threshold.
     float foam_band = smoothstep(water_look.foam.x, 1.0, height);
     float foam_amount = saturate(abs(input.velocity.x) * water_look.foam.y);
