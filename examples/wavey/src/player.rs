@@ -78,6 +78,7 @@ pub struct PlayerPhysicsParams {
     pub ccd_enabled: bool,
     /// Thrust applied along X and the stick dead zone below which no thrust is applied.
     pub thrust_force: f32,
+    pub thrust_down_force: f32,
     pub input_deadzone: f32,
     /// Upward force per world unit of hull submersion depth.
     pub buoyancy_strength: f32,
@@ -121,6 +122,7 @@ impl Default for PlayerPhysicsParams {
             gravity_scale: 2.0,
             ccd_enabled: true,
             thrust_force: 750.0,
+            thrust_down_force: 750.0,
             input_deadzone: 0.1,
             buoyancy_strength: BUOYANCY_STRENGTH,
             wave_slope_strength: 100.0,
@@ -799,7 +801,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                     body.add_force(
                         Vector3f::new(
                             0.0,
-                            -params.thrust_force * DIVE_BURST_THRUST_MULTIPLIER,
+                            -params.thrust_down_force * DIVE_BURST_THRUST_MULTIPLIER,
                             0.0,
                         ),
                         true,
