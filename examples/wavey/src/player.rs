@@ -50,6 +50,11 @@ pub struct PlayerPhysicsParams {
     pub hull_sample_x: f32,
     pub hull_sample_y: f32,
     pub hull_center_y: f32,
+    //Drag coefficients for the water
+    //Linear drag force
+    pub water_drag_linear: f32, // F = c1*v
+    //Quadratic drag force
+    pub water_drag_quadratic: f32 // F = c2*v^2
 }
 
 impl Default for PlayerPhysicsParams {
@@ -73,6 +78,9 @@ impl Default for PlayerPhysicsParams {
             hull_sample_x: 0.8,
             hull_sample_y: 0.22,
             hull_center_y: 0.25,
+            water_drag_linear: 10.0,
+            water_drag_quadratic: 10.0,
+
         }
     }
 }
@@ -230,7 +238,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     ];
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
-    let (movements, drop_bombs) = {
+    let (movements, keyboard_movements,drop_bombs) = {
         let input = engine.get_global_component::<InputComponent>()?;
 
         // movements
@@ -240,6 +248,18 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             let l_stick_x = input.get_gamepad_axis(id, GamepadAxis::LeftStickX);
             (l_stick_x, l_stick_y)
         });
+        let keyboard_movements: [(f32, f32); NUM_PLAYERS as usize] = std::array::from_fn(|i| {
+            let id = PlayerId::try_from(i as u8).unwrap();
+            let mut x = 0.0;
+            let mut y = 0.0;
+            if input.get_key(KeyboardKey::KeyA) {
+                x -= 1.0;
+            }
+            if input.get_key(KeyboardKey::KeyD) {
+                x += 1.0;
+            }
+            (x, y)
+        });
 
         // actions: drop a bomb
         let drop_bombs: [bool; NUM_PLAYERS as usize] = std::array::from_fn(|i| {
@@ -248,7 +268,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 || input.get_key_pressed(KeyboardKey::Space)
         });
 
-        (movements, drop_bombs)
+        (movements, keyboard_movements, drop_bombs)
     };
 
     // Collect player rigid body handles and input values
@@ -258,7 +278,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         engine.iterate_two_components_mut::<RigidBodyComponent, PlayerComponent>()?
     {
         if let Some(handle) = rb.get_rigid_body_handle() {
-            let input_x = movements[player.id as usize].0;
+            let input_x = movements[player.id as usize].0 + keyboard_movements[player.id as usize].0;
             ships.push((handle, input_x));
         }
     }
@@ -291,7 +311,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             let point_buoyancy_force = if world_point.y < water_samples[i].1 {
                 let depth = water_samples[i].1 - world_point.y;
-                Vector3f::new(0.0, depth * params.buoyancy_strength, 0.0)
+                Vector3f::new(0.0, depth * params.buoyancy_strength/hull_points.len() as f32, 0.0)
             } else {
                 Vector3f::new(0.0, 0.0, 0.0)
             };
@@ -316,9 +336,9 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
         // Live tuning: push changed values into the Rapier body (only when they differ, so the
         // body is not woken up every frame).
-        if (body.linear_damping() - params.linear_damping).abs() > 1.0e-6 {
-            body.set_linear_damping(params.linear_damping);
-        }
+        //if (body.linear_damping() - params.linear_damping).abs() > 1.0e-6 {
+        //    body.set_linear_damping(params.linear_damping);
+        //}
         if (body.angular_damping() - params.angular_damping).abs() > 1.0e-6 {
             body.set_angular_damping(params.angular_damping);
         }
@@ -365,20 +385,35 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         body.reset_forces(true);
         body.reset_torques(true);
 
+        let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
         // Apply thrust along X
-        if input_x.abs() > params.input_deadzone {
+        if input_x.abs() > params.input_deadzone  && in_water{
             body.add_force(
                 Vector3f::new(-input_x * params.thrust_force, 0.0, 0.0),
                 true,
             );
         }
 
-        let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
 
+        let submerged_points = point_buoyancy_forces
+            .iter()
+            .filter(|(_, force)|force.y > 0.0)
+            .count();
+        let submersion = submerged_points as f32/point_buoyancy_forces.len() as f32;
         // Buoyancy pushes up while the player is below the water surface
         for (world_point, buoyancy_force) in point_buoyancy_forces {
             if buoyancy_force.y != 0.0 {
                 body.add_force_at_point(buoyancy_force, world_point, true);
+            }
+        }
+        //Water drag: apply a linear+quadratic drag force based on the velocity of the ship in water
+        if submersion>0.0{
+            let velocity = body.linvel();
+            let speed = velocity.length();
+            if  speed > 0.0 {
+                let drag_coefficient = params.water_drag_linear + params.water_drag_quadratic * speed;
+                let drag_force = velocity * -drag_coefficient * submersion;
+                body.add_force(drag_force, true);
             }
         }
 
