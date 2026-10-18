@@ -96,8 +96,8 @@ pub mod game {
 
     #[cfg(feature = "physics")]
     pub use crate::ecs::{
-        ColliderComponent, LockedAxes, PhysicsWorldComponent, RigidBodyComponent, RigidBodyType,
-        SharedShape,
+        ColliderComponent, ColliderPart, CollisionPhase, LockedAxes, PhysicsWorldComponent,
+        RigidBodyComponent, RigidBodyType, SharedShape,
     };
 
     #[cfg(feature = "ui")]

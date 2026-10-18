@@ -63,13 +63,15 @@ pub use components::sprite_rendering_component::{
 pub use components::time_component::TimeComponent;
 
 #[cfg(feature = "physics")]
-pub use components::physics_world_component::PhysicsWorldComponent;
+pub use components::physics_world_component::{CollisionPhase, PhysicsWorldComponent};
 
 #[cfg(feature = "physics")]
 pub use components::rigid_body_component::{RigidBodyComponent, RigidBodyComponentBuilder};
 
 #[cfg(feature = "physics")]
-pub use components::collider_component::{ColliderComponent, ColliderComponentBuilder};
+pub use components::collider_component::{
+    ColliderComponent, ColliderComponentBuilder, ColliderPart,
+};
 
 #[cfg(feature = "physics")]
 pub use rapier3d::prelude::{LockedAxes, RigidBodyType, SharedShape};

@@ -189,6 +189,133 @@ pub(crate) fn ship_hull_shape(params: &PlayerPhysicsParams) -> SharedShape {
     ])
 }
 
+/// Build a ship with one solid hull and three massless overlap zones.
+/// Every collider shares the ship's single Rapier rigid body.
+/// The sprite's unflipped direction is +X; mirrored facing is handled
+/// when interpreting collision events (not by rotating the rigid body).
+fn ship_collider(params: &PlayerPhysicsParams) -> ColliderComponent {
+    let third_width = params.hull_half_width / 3.0;
+    let section_half_width = third_width + 0.35;
+    let section_x = third_width * 2.0;
+    let section_y = DECK_LOCAL_Y - params.hull_half_height;
+
+    // Sensors protrude slightly from the hull, so they overlap at contact.
+    let section_shape = SharedShape::cuboid(
+        section_half_width,
+        params.hull_half_height + 0.15,
+        params.hull_half_depth + 0.15,
+    );
+
+    ColliderComponent::builder()
+        .shape(ship_hull_shape(params))
+        .friction(params.friction)
+        .restitution(params.restitution)
+        .mass(params.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
+        .part(
+            ColliderPart::new("front", section_shape.clone())
+                .translation(Vector3f::new(section_x, section_y, 0.0)),
+        )
+        .part(
+            ColliderPart::new("middle", section_shape.clone())
+                .translation(Vector3f::new(0.0, section_y, 0.0)),
+        )
+        .part(
+            ColliderPart::new("back", section_shape)
+                .translation(Vector3f::new(-section_x, section_y, 0.0)),
+        )
+        .build()
+}
+
+/// Resolve the actual front/back when the sprite is mirrored.
+/// Sensor geometry is symmetric, so this does not require physics-body flipping.
+fn effective_ship_section(section: &str, facing: i32) -> &str {
+    if facing < 0 {
+        match section {
+            "front" => "back",
+            "back" => "front",
+            _ => section,
+        }
+    } else {
+        section
+    }
+}
+
+/// Game systems run before Pill's PostGame physics step, so these are
+/// collisions collected in the preceding frame's physics step.
+/// React only on Started: a sustained overlap should not retrigger horns.
+fn ship_collision_system(engine: &mut Engine) -> Result<()> {
+    let collisions = engine
+        .get_global_component_mut::<PhysicsWorldComponent>()?
+        .drain_collision_events();
+
+    if collisions.is_empty() {
+        return Ok(());
+    }
+
+    // Snapshot player facing before borrowing components again for sound playback.
+    let mut players = Vec::new();
+    for (entity, player, _) in
+        engine.iterate_two_components_mut::<PlayerComponent, RigidBodyComponent>()?
+    {
+        players.push((entity, player.flip));
+    }
+
+    let mut horns_to_play = Vec::new();
+    for collision in collisions {
+        if collision.phase != CollisionPhase::Started {
+            continue;
+        }
+        if collision.a.scene != collision.b.scene {
+            continue;
+        }
+
+        let Some((_, a_flip)) = players
+            .iter()
+            .find(|(entity, _)| *entity == collision.a.entity)
+        else {
+            continue;
+        };
+        let Some((_, b_flip)) = players
+            .iter()
+            .find(|(entity, _)| *entity == collision.b.entity)
+        else {
+            continue;
+        };
+
+        let part_a = effective_ship_section(&collision.a.part, *a_flip);
+        let part_b = effective_ship_section(&collision.b.part, *b_flip);
+
+        // Named sensor vs named sensor. Hull collisions remain physical but
+        // are deliberately not counted as zone-to-zone hits.
+        let (attacker, victim) = match (part_a, part_b) {
+            ("front", "back") => (collision.a.entity, collision.b.entity),
+            ("back", "front") => (collision.b.entity, collision.a.entity),
+            _ => continue,
+        };
+
+        println!("[SHIP HIT] bow of {attacker:?} hit stern of {victim:?}");
+        if !horns_to_play.contains(&attacker) {
+            horns_to_play.push(attacker);
+        }
+    }
+
+    if horns_to_play.is_empty() {
+        return Ok(());
+    }
+
+    // Use the existing single-shot horn system. Never borrow the ECS audio
+    // component while still holding the PhysicsWorldComponent borrow.
+    for (entity, _player, audio) in
+        engine.iterate_two_components_mut::<PlayerComponent, SingleShotAudioComponent>()?
+    {
+        if horns_to_play.contains(&entity) {
+            schedule_blare(audio)?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<EntityHandle>> {
     engine.register_component::<RigidBodyComponent>(active_scene)?;
     engine.register_component::<ColliderComponent>(active_scene)?;
@@ -202,6 +329,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
 
     engine.add_system("player_movement_system", player_movement_system)?;
     engine.add_system("submerge_system", submerge_system)?;
+    engine.add_system("ship_collision_system", ship_collision_system)?;
 
     // Particle emitters live on the player entities; the pass draws every emitter in one call.
     crate::particle_system::start(engine, active_scene)?;
@@ -258,14 +386,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
                 .ccd_enabled(physics.ccd_enabled)
                 .build(),
         )
-        .with_component(
-            ColliderComponent::builder()
-                .shape(ship_hull_shape(&physics))
-                .friction(physics.friction)
-                .restitution(physics.restitution)
-                .mass(physics.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
-                .build(),
-        )
+        .with_component(ship_collider(&physics))
         .with_component(PlayerComponent {
             id: PlayerId::Player1,
             flip: 1,
@@ -316,14 +437,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
                 .ccd_enabled(physics.ccd_enabled)
                 .build(),
         )
-        .with_component(
-            ColliderComponent::builder()
-                .shape(ship_hull_shape(&physics))
-                .friction(physics.friction)
-                .restitution(physics.restitution)
-                .mass(physics.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
-                .build(),
-        )
+        .with_component(ship_collider(&physics))
         .with_component(PlayerComponent {
             id: PlayerId::Player2,
             flip: 1,
@@ -598,6 +712,39 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 let Some(collider) = physics.collider_set.get_mut(collider_handle) else {
                     continue;
                 };
+
+                // Extra front/middle/back colliders are sensors. They must never
+                // receive the compound hull shape, friction, or hull mass.
+                if collider.is_sensor() {
+                    let third_width = params.hull_half_width / 3.0;
+                    let section_half_width = third_width + 0.35;
+                    let section_x = third_width * 2.0;
+                    let section_y = DECK_LOCAL_Y - params.hull_half_height;
+
+                    let shape = SharedShape::cuboid(
+                        section_half_width,
+                        params.hull_half_height + 0.15,
+                        params.hull_half_depth + 0.15,
+                    );
+                    let expected_sensor_aabb = shape.compute_local_aabb();
+                    let aabb = collider.shape().compute_local_aabb();
+                    let eps = 1.0e-4;
+                    if (aabb.mins - expected_sensor_aabb.mins).length() > eps
+                        || (aabb.maxs - expected_sensor_aabb.maxs).length() > eps
+                    {
+                        collider.set_shape(shape);
+                    }
+
+                    // Front and back are distinguished by the sign of their
+                    // existing local X offset; middle remains centered.
+                    if let Some(offset) = collider.position_wrt_parent().map(|p| p.translation) {
+                        let desired = Vector3f::new(offset.x.signum() * section_x, section_y, 0.0);
+                        if (offset - desired).length() > eps {
+                            collider.set_translation_wrt_parent(desired);
+                        }
+                    }
+                    continue;
+                }
 
                 let aabb = collider.shape().compute_local_aabb();
                 let eps = 1.0e-4;
