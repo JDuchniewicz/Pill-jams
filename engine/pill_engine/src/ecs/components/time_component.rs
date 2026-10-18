@@ -26,6 +26,12 @@ impl TimeComponent {
         }
     }
 
+    /// Replaces this frame's delta time. Game systems use this for effects such as slow motion;
+    /// every system that runs after the caller sees the new value.
+    pub fn set_delta_time(&mut self, delta_time: f32) {
+        self.delta_time = delta_time.max(0.0);
+    }
+
     pub(crate) fn update(&mut self, delta_time: f32) -> Result<()> {
         self.time += delta_time / 1000.0;
         self.delta_time = delta_time / 1000.0;

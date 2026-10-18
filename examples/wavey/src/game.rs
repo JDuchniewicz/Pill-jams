@@ -1,5 +1,6 @@
 use crate::background_pass::{BackgroundQuadPass, SkyParams};
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
+use crate::effects::EffectQueueComponent;
 use crate::player::PlayerPhysicsComponent;
 use crate::post_process::{DitherPattern, PostProcessParams, PostProcessPass};
 use crate::water::WaterParamsComponent;
@@ -43,6 +44,10 @@ impl PillGame for Game {
         engine.register_component::<AudioListenerComponent>(active_scene)?;
         engine.register_component::<AudioSourceComponent>(active_scene)?;
 
+        // --- Effect events (screenshake, vignette, aberration, slow motion) ---
+        // Started first so its scaled delta time reaches every other game system.
+        crate::effects::start(engine, active_scene)?;
+
         // --- Water simulation (must exist before visuals builds the water mesh) ---
         crate::water::start(engine)?;
 
@@ -78,6 +83,11 @@ impl PillGame for Game {
         let player_emission_height = engine
             .get_global_component::<PlayerPhysicsComponent>()?
             .emission_height
+            .clone();
+        // Shared with `effects::effect_event_system`; created in `effects::start`.
+        let effect_params = engine
+            .get_global_component::<EffectQueueComponent>()?
+            .params
             .clone();
         // Shared with the water simulation systems; created in `water::start`.
         let water_params = engine
@@ -543,6 +553,116 @@ impl PillGame for Game {
                             ui.add(
                                 egui::Slider::new(&mut water_params.height_sample_limit, 1..=128)
                                     .text("Sample limit"),
+                            );
+                        });
+                });
+
+            // --- Effect event tunables (values snapshotted when a collision queues a request) ---
+            let mut effect_params = effect_params
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            egui::Window::new("Effects")
+                .resizable(true)
+                .default_width(280.0)
+                .default_pos(egui::pos2(right_x, 900.0))
+                .show(ctx, |ui| {
+                    egui::CollapsingHeader::new("Screenshake")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.shake_strength, 0.0..=10.0)
+                                    .step_by(0.01)
+                                    .text("Strength"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.shake_duration, 0.05..=3.0)
+                                    .step_by(0.01)
+                                    .text("Duration (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.shake_damping, 0.0..=20.0)
+                                    .step_by(0.1)
+                                    .text("Damping"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.shake_frequency, 1.0..=120.0)
+                                    .step_by(0.5)
+                                    .text("Frequency"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Vignette")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.vignette_peak, 0.0..=1.0)
+                                    .step_by(0.01)
+                                    .text("Peak"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.vignette_rise, 0.05..=3.0)
+                                    .step_by(0.01)
+                                    .text("Rise (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.vignette_hold, 0.0..=3.0)
+                                    .step_by(0.01)
+                                    .text("Hold (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.vignette_fall, 0.05..=5.0)
+                                    .step_by(0.01)
+                                    .text("Fall (s)"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Chromatic aberration")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.aberration_peak, 0.0..=0.2)
+                                    .step_by(0.001)
+                                    .text("Peak"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.aberration_rise, 0.05..=3.0)
+                                    .step_by(0.01)
+                                    .text("Rise (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.aberration_hold, 0.0..=3.0)
+                                    .step_by(0.01)
+                                    .text("Hold (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.aberration_fall, 0.05..=5.0)
+                                    .step_by(0.01)
+                                    .text("Fall (s)"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Time slowdown")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.slowmo_scale, 0.05..=1.0)
+                                    .step_by(0.01)
+                                    .text("Time scale"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.slowmo_rise, 0.05..=3.0)
+                                    .step_by(0.01)
+                                    .text("Rise (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.slowmo_hold, 0.0..=3.0)
+                                    .step_by(0.01)
+                                    .text("Hold (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut effect_params.slowmo_fall, 0.05..=5.0)
+                                    .step_by(0.01)
+                                    .text("Fall (s)"),
                             );
                         });
                 });

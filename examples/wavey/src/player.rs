@@ -121,7 +121,7 @@ impl Default for PlayerPhysicsParams {
             angular_damping: 7.5,
             gravity_scale: 2.0,
             ccd_enabled: true,
-            thrust_force: 750.0,
+            thrust_force: 1250.0,
             thrust_down_force: 750.0,
             input_deadzone: 0.1,
             buoyancy_strength: BUOYANCY_STRENGTH,
@@ -308,6 +308,9 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
     if horns_to_play.is_empty() {
         return Ok(());
     }
+
+    // A ship-to-ship hit also queues one of each effect event (subject to their 2 s cooldowns).
+    crate::effects::push_collision_effects(engine)?;
 
     // Use the existing single-shot horn system. Never borrow the ECS audio
     // component while still holding the PhysicsWorldComponent borrow.

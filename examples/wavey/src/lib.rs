@@ -2,6 +2,7 @@ mod background_pass;
 mod cartoon_pass;
 mod container;
 mod duck;
+mod effects;
 mod game;
 mod particle_system;
 mod player;
