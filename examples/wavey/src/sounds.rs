@@ -27,6 +27,9 @@ pub fn start(
     active_scene: SceneHandle,
     player_handles: Vec<EntityHandle>,
 ) -> Result<()> {
+    let fast_mode = std::env::var("FAST_MODE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
     engine.register_component::<SingleShotAudioComponent>(active_scene)?;
     engine.register_component::<LoopingAudioComponent>(active_scene)?;
 
@@ -36,19 +39,6 @@ pub fn start(
     let blare_2_handle = engine.add_resource(blare_2)?;
     let blare_3 = Sound::new("blare_3", "audio/blare_3.wav".into());
     let blare_3_handle = engine.add_resource(blare_3)?;
-
-    let mut ambient_1 = Sound::new("ambient_1", "audio/hejho.mp3".into());
-    ambient_1.initialize(engine)?;
-    let ambient_1_duration_ms = ambient_1.duration().unwrap().as_secs_f32();
-    let ambient_1_handle = engine.add_resource(ambient_1)?;
-    let mut ambient_2 = Sound::new("ambient_2", "audio/slop.mp3".into());
-    ambient_2.initialize(engine)?;
-    let ambient_2_duration_ms = ambient_2.duration().unwrap().as_secs_f32();
-    let ambient_2_handle = engine.add_resource(ambient_2)?;
-    let mut ambient_3 = Sound::new("ambient_3", "audio/spanish.mp3".into());
-    ambient_3.initialize(engine)?; // TODO: hackssss
-    let ambient_3_duration_ms = ambient_3.duration().unwrap().as_secs_f32();
-    let ambient_3_handle = engine.add_resource(ambient_3)?;
 
     for handle in player_handles {
         engine.add_component_to_entity(
@@ -64,29 +54,47 @@ pub fn start(
         )?;
     }
 
-    engine
-        .build_entity(active_scene)
-        .with_component(LoopingAudioComponent {
-            timeouts: Vec::from([
-                ambient_1_duration_ms,
-                ambient_2_duration_ms,
-                ambient_3_duration_ms,
-            ]),
-            elapsed: 0.0,
-            tracks: Vec::from([ambient_1_handle, ambient_2_handle, ambient_3_handle]),
-            chosen_track: 0,
-        })
-        .with_component(
-            AudioSourceComponent::builder()
-                .sound_type(SoundType::Sound2D)
-                .volume(0.15)
-                .play_on_awake(false)
-                .build(),
-        )
-        .build();
-
     engine.add_system("single_shot_audio_system", single_shot_audio_system)?;
-    engine.add_system("looping_audio_system", looping_audio_system)?;
+
+    if !fast_mode {
+        let ambient_paths = [
+            ("ambient_1", "audio/hejho.mp3"),
+            ("ambient_2", "audio/slop.mp3"),
+            ("ambient_3", "audio/spanish.mp3"),
+        ];
+
+        let mut tracks = Vec::new();
+        let mut timeouts = Vec::new();
+
+        for (name, path) in ambient_paths {
+            let mut sound = Sound::new(name, path.into());
+            sound.initialize(engine)?;
+
+            let duration = sound.duration().map(|d| d.as_secs_f32()).unwrap_or(0.0);
+
+            tracks.push(engine.add_resource(sound)?);
+            timeouts.push(duration);
+        }
+
+        engine
+            .build_entity(active_scene)
+            .with_component(LoopingAudioComponent {
+                timeouts,
+                elapsed: 0.0,
+                tracks,
+                chosen_track: 0,
+            })
+            .with_component(
+                AudioSourceComponent::builder()
+                    .sound_type(SoundType::Sound2D)
+                    .volume(0.15)
+                    .play_on_awake(false)
+                    .build(),
+            )
+            .build();
+
+        engine.add_system("looping_audio_system", looping_audio_system)?;
+    }
 
     Ok(())
 }
