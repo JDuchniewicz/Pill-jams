@@ -32,6 +32,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(
             TransformComponent::builder()
                 .position(Vector3f::new(-1.0, 0.0, 0.0))
+                .rotation(Vector3f::new(0.0, 180.0, 0.0))
                 .build(),
         )
         .with_component(
@@ -59,7 +60,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(SharedShape::cuboid(0.5, 0.8, 0.5))
+                .shape(SharedShape::cuboid(1.0, 0.25, 0.3))
                 .friction(0.4)
                 .restitution(0.0)
                 .mass(SHIP_MASS)
@@ -70,16 +71,59 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         })
         .build();
 
+    // Player 2 is a camera-facing sprite; the transform drives its world position.
+    engine
+        .build_entity(active_scene)
+        .with_component(
+            TransformComponent::builder()
+                .position(Vector3f::new(-20.0, 0.0, 0.0))
+                .build(),
+        )
+        .with_component(
+            SpriteRenderingComponent::builder()
+                .texture(&ship_texture_handle)
+                .size(Vector2f::new(20.0, 20.0))
+                // 2D game objects stay visible over the water and the other player
+                .depth_test(false)
+                // Hull below the water surface is drawn at half brightness
+                .submerge(0.5, 0.0)
+                .build(),
+        )
+        .with_component(
+            RigidBodyComponent::builder()
+                .body_type(RigidBodyType::Dynamic)
+                .linear_damping(5.0)
+                .angular_damping(3.0)
+                .locked_axes(
+                    LockedAxes::TRANSLATION_LOCKED_Z
+                        | LockedAxes::ROTATION_LOCKED_X
+                        | LockedAxes::ROTATION_LOCKED_Y,
+                )
+                .ccd_enabled(true)
+                .build(),
+        )
+        .with_component(
+            ColliderComponent::builder()
+                .shape(SharedShape::cuboid(1.0, 0.25, 0.3))
+                .friction(0.4)
+                .restitution(0.0)
+                .mass(SHIP_MASS)
+                .build(),
+        )
+        .with_component(PlayerComponent {
+            id: PlayerId::Player2,
+        })
+        .build();
+
     Ok(())
 }
 
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
     const HULL_POINTS: [Vector3f; 3] = [
-        Vector3f::new(-0.8, -0.4, 0.0), // Left
-        Vector3f::new(0.0, -0.5, 0.0),  // Center
-        Vector3f::new(0.8, -0.4, 0.0),  // Right
+        Vector3f::new(-0.8, -0.22, 0.0),
+        Vector3f::new(0.0, -0.25, 0.0),
+        Vector3f::new(0.8, -0.22, 0.0),
     ];
-
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
     let (movements, drop_bombs) = {
@@ -151,8 +195,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
 
         let dx = water_samples[2].0 - water_samples[0].0;
-        let slope = if dx > 0.001 {
-            (water_samples[2].1 - water_samples[2].0) / dx
+        let slope = if dx.abs() > 0.001 {
+            (water_samples[2].1 - water_samples[0].1) / dx
         } else {
             0.0
         };
