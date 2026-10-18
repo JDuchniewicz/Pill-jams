@@ -16,6 +16,10 @@ define_global_component!(PlayerPhysicsComponent {
 // TODO: for now we are playing locally -> maybe also play over network
 const NUM_PLAYERS: u8 = 2;
 
+const METERS_PER_WORLD_UNIT: f32 = 0.20;
+const GRAVITY_MPS2: f32 = -9.81;
+const BUOYANCY_STRENGTH: f32 = 100.0 / METERS_PER_WORLD_UNIT;
+
 /// Every tunable of the ship physics, live-edited from the "Player physics" egui window.
 #[derive(Clone, Debug)]
 pub struct PlayerPhysicsParams {
@@ -63,7 +67,7 @@ impl Default for PlayerPhysicsParams {
             ccd_enabled: true,
             thrust_force: 750.0,
             input_deadzone: 0.1,
-            buoyancy_strength: 100.0,
+            buoyancy_strength: BUOYANCY_STRENGTH,
             wave_slope_strength: 100.0,
             slope_clamp: 1.0,
             hull_sample_x: 0.8,
@@ -193,6 +197,14 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
             id: PlayerId::Player2,
         })
         .build();
+
+    engine
+        .get_global_component_mut::<PhysicsWorldComponent>()?
+        .set_gravity(Vector3f::new(
+            0.0,
+            GRAVITY_MPS2 / METERS_PER_WORLD_UNIT,
+            0.0,
+        ));
 
     Ok(())
 }
