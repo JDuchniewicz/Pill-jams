@@ -217,6 +217,9 @@ fn ship_collider(params: &PlayerPhysicsParams) -> ColliderComponent {
         .friction(params.friction)
         .restitution(params.restitution)
         .mass(params.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
+        // Emit hull-to-hull Started events so Pill can attach the solved impact
+        // force and the current front/middle/back sensor overlaps.
+        .active_events(ActiveEvents::COLLISION_EVENTS)
         .part(
             ColliderPart::new("front", section_shape.clone())
                 .translation(Vector3f::new(section_x, section_y, 0.0)),
@@ -246,9 +249,14 @@ fn effective_ship_section(section: &str, facing: i32) -> &str {
     }
 }
 
-/// Game systems run before Pill's PostGame physics step, so these are
-/// collisions collected in the preceding frame's physics step.
-/// React only on Started: a sustained overlap should not retrigger horns.
+// Contact force is Rapier's total solved normal impulse divided by fixed dt.
+// Tune this against observed crashes; it is not an absolute real-world unit.
+const RAM_IMPACT_FORCE_THRESHOLD: f32 = 250.0;
+
+/// React to physical hull impacts rather than raw sensor overlaps.
+/// The engine enriches a hull collision with its force and the active
+/// front/middle/back intersections between the same two ships.
+/// Game systems run before the PostGame physics step, so events arrive next frame.
 fn ship_collision_system(engine: &mut Engine) -> Result<()> {
     let collisions = engine
         .get_global_component_mut::<PhysicsWorldComponent>()?
@@ -258,7 +266,7 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // Snapshot player facing before borrowing components again for sound playback.
+    // Snapshot sprite facing before borrowing ECS components again for effects.
     let mut players = Vec::new();
     for (entity, player, _) in
         engine.iterate_two_components_mut::<PlayerComponent, RigidBodyComponent>()?
@@ -271,7 +279,14 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         if collision.phase != CollisionPhase::Started {
             continue;
         }
-        if collision.a.scene != collision.b.scene {
+
+        // Sensor-only events have no physical force. Ignore these until their
+        // corresponding solid hull contact is reported by Pill.
+        let Some(force) = collision.force_magnitude else {
+            continue;
+        };
+
+        if force < RAM_IMPACT_FORCE_THRESHOLD || collision.a.scene != collision.b.scene {
             continue;
         }
 
@@ -288,20 +303,25 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
             continue;
         };
 
-        let part_a = effective_ship_section(&collision.a.part, *a_flip);
-        let part_b = effective_ship_section(&collision.b.part, *b_flip);
+        // These are the sensor pairs which were overlapping when the hulls
+        // collided. A real ram is front -> back in the ships' current facings.
+        for zones in &collision.zone_contacts {
+            let part_a = effective_ship_section(&zones.a.part, *a_flip);
+            let part_b = effective_ship_section(&zones.b.part, *b_flip);
 
-        // Named sensor vs named sensor. Hull collisions remain physical but
-        // are deliberately not counted as zone-to-zone hits.
-        let (attacker, victim) = match (part_a, part_b) {
-            ("front", "back") => (collision.a.entity, collision.b.entity),
-            ("back", "front") => (collision.b.entity, collision.a.entity),
-            _ => continue,
-        };
+            let (attacker, victim) = match (part_a, part_b) {
+                ("front", "back") => (collision.a.entity, collision.b.entity),
+                ("back", "front") => (collision.b.entity, collision.a.entity),
+                _ => continue,
+            };
 
-        println!("[SHIP HIT] bow of {attacker:?} hit stern of {victim:?}");
-        if !horns_to_play.contains(&attacker) {
-            horns_to_play.push(attacker);
+            println!("[SHIP RAM] bow of {attacker:?} hit stern of {victim:?} (force: {force:.1})");
+            if !horns_to_play.contains(&attacker) {
+                horns_to_play.push(attacker);
+            }
+            // A ship pair may have multiple sensor overlaps, but one impact
+            // should produce just one response.
+            break;
         }
     }
 
@@ -309,11 +329,11 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // A ship-to-ship hit also queues one of each effect event (subject to their 2 s cooldowns).
+    // Preserve the newer game's hit effects and their internal cooldowns.
     crate::effects::push_collision_effects(engine)?;
 
-    // Use the existing single-shot horn system. Never borrow the ECS audio
-    // component while still holding the PhysicsWorldComponent borrow.
+    // Use the existing single-shot sound system; never hold a physics-world
+    // borrow while accessing sound ECS components.
     for (entity, _player, audio) in
         engine.iterate_two_components_mut::<PlayerComponent, SingleShotAudioComponent>()?
     {

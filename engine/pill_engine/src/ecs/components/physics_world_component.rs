@@ -23,13 +23,32 @@ pub struct ColliderIdentity {
     pub collider: ColliderHandle,
 }
 
-/// A collision between two named Pill colliders.
-/// A sensor event means zone overlap, not necessarily a force-producing impact.
+/// Named sensor zones that overlap while two physical colliders touch.
+/// `a` and `b` are oriented to match `PhysicsCollisionEvent::a` and `::b`.
+#[derive(Clone)]
+pub struct ColliderZoneContact {
+    pub a: ColliderIdentity,
+    pub b: ColliderIdentity,
+}
+
+/// Game-facing collision event enriched after Rapier has solved the physics step.
+///
+/// - Sensor overlap: `force_magnitude` is `None`, `zone_contacts` is empty.
+/// - Solid-body contact: `force_magnitude` is the sum of contact impulse
+///   magnitudes divided by the fixed physics timestep (can be 0.0).
+/// - Solid-body Started: `zone_contacts` lists the sensor pairs currently
+///   overlapping *between these two entities*, so games can classify an
+///   impact by region without correlating separate event streams.
+///
+/// This is one event per actual Rapier collider-pair start/stop, NOT one event
+/// per zone. Force represents the physical contact, never a sensor force.
 #[derive(Clone)]
 pub struct PhysicsCollisionEvent {
     pub phase: CollisionPhase,
     pub a: ColliderIdentity,
     pub b: ColliderIdentity,
+    pub force_magnitude: Option<Real>,
+    pub zone_contacts: Vec<ColliderZoneContact>,
 }
 
 /// Global Rapier physics world with a buffered, game-facing collision event queue.
@@ -130,6 +149,61 @@ impl PhysicsWorldComponent {
         &self.pending_collision_events
     }
 
+    /// Return currently overlapping *sensor vs sensor* zones for the two
+    /// entities involved in a solid-body contact. The Rapier narrow phase is
+    /// already populated for the just-completed fixed step, so no second
+    /// collision query or additional force-event subscription is necessary.
+    fn overlapping_zones(
+        &self,
+        a: &ColliderIdentity,
+        b: &ColliderIdentity,
+    ) -> Vec<ColliderZoneContact> {
+        let mut zones = Vec::new();
+        for (first_handle, second_handle, overlapping) in self.narrow_phase.intersection_pairs() {
+            if !overlapping {
+                continue;
+            }
+            let (Some(first), Some(second)) = (
+                self.collider_owners.get(&first_handle),
+                self.collider_owners.get(&second_handle),
+            ) else {
+                continue;
+            };
+            // Explicitly require two sensors: an overlap with the solid hull
+            // is not sufficient to say which named sections hit each other.
+            let (Some(first_collider), Some(second_collider)) = (
+                self.collider_set.get(first_handle),
+                self.collider_set.get(second_handle),
+            ) else {
+                continue;
+            };
+            if !first_collider.is_sensor() || !second_collider.is_sensor() {
+                continue;
+            }
+
+            if first.scene == a.scene
+                && first.entity == a.entity
+                && second.scene == b.scene
+                && second.entity == b.entity
+            {
+                zones.push(ColliderZoneContact {
+                    a: first.clone(),
+                    b: second.clone(),
+                });
+            } else if second.scene == a.scene
+                && second.entity == a.entity
+                && first.scene == b.scene
+                && first.entity == b.entity
+            {
+                zones.push(ColliderZoneContact {
+                    a: second.clone(),
+                    b: first.clone(),
+                });
+            }
+        }
+        zones
+    }
+
     pub fn step(&mut self) {
         self.physics_pipeline.step(
             self.gravity,
@@ -155,8 +229,8 @@ impl PhysicsWorldComponent {
             };
 
             let (Some(a), Some(b)) = (
-                self.collider_owners.get(&collider_a),
-                self.collider_owners.get(&collider_b),
+                self.collider_owners.get(&collider_a).cloned(),
+                self.collider_owners.get(&collider_b).cloned(),
             ) else {
                 // External Rapier colliders that weren't created by ColliderComponent.
                 continue;
@@ -167,10 +241,36 @@ impl PhysicsWorldComponent {
                 continue;
             }
 
+            // Collision start events are emitted during narrow-phase detection,
+            // before the solver knows the contact force. Querying AFTER step()
+            // gives the solved impulse for that exact collider pair. Sensors do
+            // not have solver impulses; they always report None.
+            let force_magnitude = if phase == CollisionPhase::Started {
+                self.narrow_phase
+                    .contact_pair(collider_a, collider_b)
+                    .filter(|pair| pair.has_any_active_contact())
+                    .map(|pair| {
+                        pair.total_impulse_magnitude()
+                            / self.integration_parameters.dt.max(f32::EPSILON)
+                    })
+            } else {
+                None
+            };
+
+            // Only enrich real physical contacts. For sensor-only events, the
+            // old Started/Stopped API remains available with no impact force.
+            let zone_contacts = if force_magnitude.is_some() {
+                self.overlapping_zones(&a, &b)
+            } else {
+                Vec::new()
+            };
+
             self.pending_collision_events.push(PhysicsCollisionEvent {
                 phase,
-                a: a.clone(),
-                b: b.clone(),
+                a,
+                b,
+                force_magnitude,
+                zone_contacts,
             });
         }
     }
