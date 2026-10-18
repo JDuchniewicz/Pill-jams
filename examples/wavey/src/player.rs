@@ -217,7 +217,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
     let ship_texture_handle = engine.add_resource::<Texture>(Texture::new(
         "ship_test",
         TextureType::Color,
-        ResourceLoader::Path("textures/ship_test.png".into()),
+        ResourceLoader::Path("textures/ship.png".into()),
     ))?;
     let foam_texture_handle = engine.add_resource::<Texture>(Texture::new(
         "foam_particle",
@@ -645,11 +645,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             } else {
                 if next_dive_was_held[player_index] {
                     let charge = next_dive_hold_time[player_index].min(DIVE_CHARGE_MAX);
-                    let impulse = Vector3f::new(
-                        0.0,
-                        -charge * DIVE_RELEASE_IMPULSE_PER_SECOND,
-                        0.0,
-                    );
+                    let impulse =
+                        Vector3f::new(0.0, -charge * DIVE_RELEASE_IMPULSE_PER_SECOND, 0.0);
                     body.apply_impulse(impulse, true);
                 }
                 next_dive_hold_time[player_index] = 0.0;
