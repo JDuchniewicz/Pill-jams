@@ -1,12 +1,7 @@
-use crate::{player::PlayerComponent, water_floating::WaterFloatingComponent};
+use crate::water_floating::WaterFloatingComponent;
 use pill_engine::{define_component, game::*};
 
 // TODO:LIST
-// collision in ass and rumble
-// containers?
-// physics bump
-// screen shake dependent on thrust force
-// same with rumble
 // container collider fix
 // why with 10 containers we get such big FPS drops
 

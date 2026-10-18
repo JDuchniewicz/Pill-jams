@@ -1,6 +1,6 @@
 use pill_engine::{define_global_component, game::*};
 
-use crate::duck::spawn_floating_prop;
+use crate::duck::{spawn_floating_prop, FloatingPropKind};
 
 /// World size of the container sprite quad (the container art is square, 47x47 px).
 const CONTAINER_SPRITE_SIZE: f32 = 3.0;
@@ -53,5 +53,6 @@ pub fn spawn_container(engine: &mut Engine) -> Result<()> {
             CONTAINER_SPAWN_POSITION[2],
         ),
         CONTAINER_SPRITE_SIZE,
+        FloatingPropKind::Container,
     )
 }

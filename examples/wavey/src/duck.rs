@@ -42,6 +42,15 @@ fn duck_spawn_system(engine: &mut Engine) -> Result<()> {
     Ok(())
 }
 
+/// Shared builder for the non-player floating props (ducks, containers): sprite + rigid body +
+/// hull collider + water floating, i.e. the same setup as a player ship, minus inputs, particles
+/// and audio. The sprite uses the submerged sprite shader.
+#[derive(Clone, Copy, Debug)]
+pub enum FloatingPropKind {
+    Duck,
+    Container,
+}
+
 /// Builds a duck at the duck spawn position.
 pub fn spawn_duck(engine: &mut Engine) -> Result<()> {
     let texture = engine
@@ -56,17 +65,18 @@ pub fn spawn_duck(engine: &mut Engine) -> Result<()> {
             DUCK_SPAWN_POSITION[2],
         ),
         DUCK_SPRITE_SIZE,
+        FloatingPropKind::Duck,
     )
 }
 
-/// Shared builder for the non-player floating props (ducks, containers): sprite + rigid body +
-/// hull collider + water floating, i.e. the same setup as a player ship, minus inputs, particles
-/// and audio. The sprite uses the submerged sprite shader.
+/// Builds a non-player floating prop with physics matching its sprite.
+/// Ships, ducks, and containers no longer share collision geometry.
 pub fn spawn_floating_prop(
     engine: &mut Engine,
     texture: TextureHandle,
     position: Vector3f,
     sprite_size: f32,
+    kind: FloatingPropKind,
 ) -> Result<()> {
     let params = {
         let shared = engine.get_global_component::<PlayerPhysicsComponent>()?;
@@ -76,18 +86,57 @@ pub fn spawn_floating_prop(
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         guard.clone()
     };
+
     let active_scene = engine.get_active_scene_handle()?;
 
-    let entity = engine
+    // Collider half-extents and mass in world units.
+    let (shape, half_width, half_height, mass) = match kind {
+        FloatingPropKind::Container => {
+            // Square crate, slightly inset from the 3x3 sprite.
+            // At sprite_size=3: collider is 2.7 x 2.7 world units.
+            let half_width = sprite_size * 0.30;
+            let half_height = sprite_size * 0.30;
+            let half_depth = sprite_size * 0.10;
+
+            (
+                SharedShape::cuboid(half_width, half_height, half_depth),
+                half_width,
+                half_height,
+                3.0,
+            )
+        }
+
+        FloatingPropKind::Duck => {
+            // Horizontal capsule approximating a duck's body.
+            // Smaller and rounder than the container collider.
+            let radius = sprite_size * 0.22;
+            let half_segment = sprite_size * 0.14;
+
+            (
+                SharedShape::capsule_x(half_segment, radius),
+                half_segment + radius,
+                radius,
+                1.2,
+            )
+        }
+    };
+
+    // Three buoyancy samples relative to the PROP's actual dimensions.
+    // Previously these used the 20-unit ship geometry!
+    let buoyancy_points = [
+        Vector3f::new(-half_width * 0.65, -half_height * 0.80, 0.0),
+        Vector3f::new(0.0, -half_height * 0.80, 0.0),
+        Vector3f::new(half_width * 0.65, -half_height * 0.80, 0.0),
+    ];
+
+    engine
         .build_entity(active_scene)
         .with_component(TransformComponent::builder().position(position).build())
         .with_component(
             SpriteRenderingComponent::builder()
                 .texture(&texture)
                 .size(Vector2f::new(sprite_size, sprite_size))
-                // 2D game objects stay visible over the water
                 .depth_test(false)
-                // Hull below the water surface is drawn at half brightness
                 .submerge(0.5, 0.0)
                 .build(),
         )
@@ -106,17 +155,14 @@ pub fn spawn_floating_prop(
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(ship_hull_shape(&params))
+                .shape(shape)
                 .friction(params.friction)
                 .restitution(params.restitution)
-                .mass(params.ship_mass * HULL_GEOMETRY_MASS_FRACTION)
+                .mass(mass)
                 .build(),
         )
-        .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&params)))
+        .with_component(WaterFloatingComponent::new(buoyancy_points))
         .build();
-
-    // Same low ballast as the ships, so the prop floats upright instead of capsizing.
-    apply_float_ballast(engine, entity, &params)?;
 
     Ok(())
 }
