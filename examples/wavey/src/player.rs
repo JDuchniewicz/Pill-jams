@@ -480,7 +480,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
 #[derive(Clone, Copy, Default)]
 struct ShipControls {
     movement_x: f32,
-    movement_y: f32,
+    movement_y: bool,
     drop_bomb: bool,
     horn_blare: bool,
 }
@@ -489,8 +489,8 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
     let input = engine.get_global_component::<InputComponent>()?;
     let keyboard_x =
         (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
-    let keyboard_y =
-        (input.get_key(KeyboardKey::KeyS) as i32 - input.get_key(KeyboardKey::KeyW) as i32) as f32;
+    let keyboard_dive =
+        input.get_key(KeyboardKey::KeyS);
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
     let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
@@ -500,9 +500,9 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
             // Keyboard is reserved for Player 1, not both ships.
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
-            movement_y: input.get_gamepad_axis(id, GamepadAxis::LeftStickY)
-                + if i == 0 { keyboard_y } else { 0.0 },
-            drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::A)
+            movement_y: input.get_gamepad_button_pressed(id, GamepadButton::A)
+                || ( i == 0 && keyboard_dive),
+            drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::X)
                 || (i == 0 && keyboard_bomb),
             horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
                 || (i == 0 && keyboard_blare),
@@ -778,7 +778,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             // Apply thrust along X
             // Horizontal thrust needs water contact; diving (S) thrusts regardless.
             let thrusting = (input_x.abs() > params.input_deadzone && in_water)
-                || input_y > params.input_deadzone;
+                || input_y;
             emitter_states[player_index] = (thrusting, input_x, water_level);
 
             // Horizontal thrust is only available in water. There is no upward
@@ -790,7 +790,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             // Holding the dive input only charges the dive; it must not move the
             // ship down. On release, the charge becomes a burst duration during
             // which a strong downward force is applied (capped by DIVE_CHARGE_MAX).
-            let diving = input_y > params.input_deadzone;
+            let diving = input_y;
             if diving {
                 next_dive_hold_time[player_index] += DIVE_CHARGE_MULTIPLIER * delta_time;
             } else {
