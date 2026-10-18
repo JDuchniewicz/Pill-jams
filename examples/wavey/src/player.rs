@@ -606,8 +606,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
             // Keyboard is reserved for Player 1, not both ships.
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
-            movement_y: input.get_gamepad_button_pressed(id, GamepadButton::A)
-                || (i == 0 && keyboard_dive),
+            movement_y: input.get_gamepad_button(id, GamepadButton::A) || (i == 0 && keyboard_dive),
             drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::X)
                 || (i == 0 && keyboard_bomb),
             horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
