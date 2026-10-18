@@ -18,6 +18,12 @@ define_component!(WaterFloatingComponent {
     submersion: f32,
     // Water surface height at the entity's X position.
     water_level: f32,
+    // Total upward buoyancy force applied this frame (world units of force).
+    buoyancy_force: f32,
+    // Same value from the previous frame (used when the ship breaks the surface).
+    previous_buoyancy_force: f32,
+    // Whether the entity was fully submerged (all probes under) on the previous frame.
+    was_fully_submerged: bool,
 });
 
 impl WaterFloatingComponent {
@@ -27,6 +33,9 @@ impl WaterFloatingComponent {
             in_water: false,
             submersion: 0.0,
             water_level: 0.0,
+            buoyancy_force: 0.0,
+            previous_buoyancy_force: 0.0,
+            was_fully_submerged: false,
         }
     }
 
@@ -129,6 +138,7 @@ fn water_floating_system(engine: &mut Engine) -> Result<()> {
             .iter()
             .filter(|(_, force)| force.y > 0.0)
             .count();
+        let buoyancy_force = point_forces.iter().map(|(_, force)| force.y.max(0.0)).sum();
         floating_states.push((
             entity,
             handle,
@@ -137,6 +147,7 @@ fn water_floating_system(engine: &mut Engine) -> Result<()> {
             water_level,
             submerged_points > 0,
             submerged_points as f32 / point_forces.len() as f32,
+            buoyancy_force,
         ));
     }
 
@@ -144,7 +155,7 @@ fn water_floating_system(engine: &mut Engine) -> Result<()> {
     {
         let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-        for (_, handle, point_forces, slope, _, in_water, submersion) in &floating_states {
+        for (_, handle, point_forces, slope, _, in_water, submersion, _) in &floating_states {
             let Some(body) = physics.rigid_body_set.get_mut(*handle) else {
                 continue;
             };
@@ -190,12 +201,16 @@ fn water_floating_system(engine: &mut Engine) -> Result<()> {
     for (entity, _, floating) in
         engine.iterate_two_components_mut::<RigidBodyComponent, WaterFloatingComponent>()?
     {
-        if let Some((_, _, _, _, water_level, in_water, submersion)) =
+        if let Some((_, _, _, _, water_level, in_water, submersion, buoyancy_force)) =
             floating_states.iter().find(|state| state.0 == entity)
         {
+            let was_fully_submerged = floating.is_fully_submerged();
             floating.water_level = *water_level;
             floating.in_water = *in_water;
             floating.submersion = *submersion;
+            floating.previous_buoyancy_force = floating.buoyancy_force;
+            floating.buoyancy_force = *buoyancy_force;
+            floating.was_fully_submerged = was_fully_submerged;
         }
     }
 

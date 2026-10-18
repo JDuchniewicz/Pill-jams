@@ -7,7 +7,7 @@ use crate::post_process::PostProcessParams;
 /// Minimum time between two queued requests of the same event type.
 const EVENT_COOLDOWN: f32 = 2.0;
 /// Number of event kinds, i.e. the size of the per-kind cooldown table.
-const EVENT_KIND_COUNT: usize = 4;
+const EVENT_KIND_COUNT: usize = 5;
 
 // --- Tunables (edited in the egui overlay, snapshotted when a request is created) ---
 
@@ -66,6 +66,7 @@ pub enum EffectKind {
     Vignette,
     ChromaticAberration,
     SlowMotion,
+    Bomb,
 }
 
 impl EffectKind {
@@ -74,6 +75,7 @@ impl EffectKind {
         EffectKind::Vignette,
         EffectKind::ChromaticAberration,
         EffectKind::SlowMotion,
+        EffectKind::Bomb,
     ];
 
     pub fn label(self) -> &'static str {
@@ -82,6 +84,7 @@ impl EffectKind {
             EffectKind::Vignette => "Vignette",
             EffectKind::ChromaticAberration => "Chromatic aberration",
             EffectKind::SlowMotion => "Time slowdown",
+            EffectKind::Bomb => "Surfacing bomb",
         }
     }
 }
@@ -265,6 +268,54 @@ impl SlowMotionEvent {
     }
 }
 
+/// Drops a bomb into the water at a world position, scaled by `power`. It only lives for the frame
+/// on which it is processed (the splash itself is owned by the water simulation).
+#[derive(Clone, Debug)]
+pub struct BombEvent {
+    pub age: f32,
+    pub position_x: f32,
+    pub position_y: f32,
+    pub power: f32,
+    /// Optional fuse override; `Some(0.0)` detonates on this frame.
+    pub fuse: Option<f32>,
+}
+
+impl BombEvent {
+    pub fn new(position_x: f32, position_y: f32, power: f32) -> Self {
+        Self {
+            age: 0.0,
+            position_x,
+            position_y,
+            power,
+            fuse: None,
+        }
+    }
+
+    /// Creates a bomb that detonates immediately (no fuse).
+    pub fn immediate(position_x: f32, position_y: f32, power: f32) -> Self {
+        Self {
+            fuse: Some(0.0),
+            ..Self::new(position_x, position_y, power)
+        }
+    }
+
+    fn is_finished(&self) -> bool {
+        // A one-shot: it has done its job once the handler ran.
+        self.age > 0.0
+    }
+
+    fn handler(&mut self, engine: &mut Engine, delta_time: f32) -> Result<()> {
+        self.age += delta_time.max(f32::EPSILON);
+        crate::water::add_bomb_with_power_and_fuse(
+            engine,
+            self.position_x,
+            self.position_y,
+            self.power,
+            self.fuse,
+        )
+    }
+}
+
 /// One queued request. Every variant carries its own parameters, age and lifetime, and knows how
 /// to process itself through `handler`.
 #[derive(Clone, Debug)]
@@ -273,6 +324,7 @@ pub enum EffectEvent {
     Vignette(VignetteEvent),
     ChromaticAberration(ChromaticAberrationEvent),
     SlowMotion(SlowMotionEvent),
+    Bomb(BombEvent),
 }
 
 impl EffectEvent {
@@ -282,6 +334,7 @@ impl EffectEvent {
             EffectEvent::Vignette(_) => EffectKind::Vignette,
             EffectEvent::ChromaticAberration(_) => EffectKind::ChromaticAberration,
             EffectEvent::SlowMotion(_) => EffectKind::SlowMotion,
+            EffectEvent::Bomb(_) => EffectKind::Bomb,
         }
     }
 
@@ -303,6 +356,7 @@ impl EffectEvent {
                 event.handler(delta_time, frame);
                 Ok(())
             }
+            EffectEvent::Bomb(event) => event.handler(engine, delta_time),
         }
     }
 
@@ -312,13 +366,16 @@ impl EffectEvent {
             EffectEvent::Vignette(event) => event.is_finished(),
             EffectEvent::ChromaticAberration(event) => event.is_finished(),
             EffectEvent::SlowMotion(event) => event.is_finished(),
+            EffectEvent::Bomb(event) => event.is_finished(),
         }
     }
 
     /// Restores the stock values once the event is removed from the in-progress queue.
     fn finish(&self, engine: &mut Engine) -> Result<()> {
         match self {
-            EffectEvent::ScreenShake(_) | EffectEvent::SlowMotion(_) => Ok(()),
+            EffectEvent::ScreenShake(_) | EffectEvent::SlowMotion(_) | EffectEvent::Bomb(_) => {
+                Ok(())
+            }
             EffectEvent::Vignette(event) => event.finish(engine),
             EffectEvent::ChromaticAberration(event) => event.finish(engine),
         }
@@ -373,12 +430,21 @@ pub fn start(engine: &mut Engine, _active_scene: SceneHandle) -> Result<()> {
 
 /// Queues one request. Respects the per-type cooldown (`EVENT_COOLDOWN` per event type).
 pub fn push_effect(engine: &mut Engine, event: EffectEvent) -> Result<()> {
+    push_effect_with_cooldown(engine, event, EVENT_COOLDOWN)
+}
+
+/// Queues one request with an explicit cooldown for that event type.
+pub fn push_effect_with_cooldown(
+    engine: &mut Engine,
+    event: EffectEvent,
+    cooldown: f32,
+) -> Result<()> {
     let state = engine.get_global_component_mut::<EffectQueueComponent>()?;
     let kind = event.kind() as usize;
     if state.cooldowns[kind] > 0.0 {
         return Ok(());
     }
-    state.cooldowns[kind] = EVENT_COOLDOWN;
+    state.cooldowns[kind] = cooldown.max(0.0);
     state.queue.push(event);
     Ok(())
 }

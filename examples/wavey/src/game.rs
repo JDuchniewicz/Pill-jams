@@ -367,6 +367,26 @@ impl PillGame for Game {
                             );
                         });
 
+                    // When a ship breaks the surface from under the water with enough force, a
+                    // bomb is dropped there; its power follows the surfacing force.
+                    egui::CollapsingHeader::new("Surfacing bomb")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.bomb_force_threshold,
+                                    10.0..=2000.0,
+                                )
+                                .step_by(1.0)
+                                .text("Force threshold"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.bomb_power_scale, 0.0..=5.0)
+                                    .step_by(0.01)
+                                    .text("Power per force"),
+                            );
+                        });
+
                     egui::CollapsingHeader::new("Hull samples")
                         .default_open(false)
                         .show(ui, |ui| {

@@ -13,6 +13,8 @@ pub struct Bomb {
     pub x: f32,
     pub y: f32,
     pub time_to_detonate: f32,
+    // Multiplier applied to `WaterParams::kick_strength` when it detonates (1.0 = normal bomb).
+    pub power: f32,
 }
 
 define_global_component!(GameState {
@@ -326,13 +328,30 @@ fn kick_water(
 
 /// Queues a bomb at a normalized water position (x in 0..1).
 pub fn add_bomb(engine: &mut Engine, x: f32, y: f32) -> Result<()> {
+    add_bomb_with_power(engine, x, y, 1.0)
+}
+
+/// Same as `add_bomb`, but scales the explosion by `power` (1.0 = the tuned kick strength).
+pub fn add_bomb_with_power(engine: &mut Engine, x: f32, y: f32, power: f32) -> Result<()> {
+    add_bomb_with_power_and_fuse(engine, x, y, power, None)
+}
+
+/// Same as `add_bomb_with_power`, with an optional custom fuse (`Some(0.0)` detonates at once).
+pub fn add_bomb_with_power_and_fuse(
+    engine: &mut Engine,
+    x: f32,
+    y: f32,
+    power: f32,
+    fuse: Option<f32>,
+) -> Result<()> {
     let params = water_params(engine)?;
     let game_state = engine.get_global_component_mut::<GameState>()?;
     let normalized_x = (x - WATER_X_MIN) / (WATER_X_MAX - WATER_X_MIN);
     game_state.bombs.push(Bomb {
         x: normalized_x,
         y,
-        time_to_detonate: params.time_to_detonate,
+        time_to_detonate: fuse.unwrap_or(params.time_to_detonate).max(0.0),
+        power: power.max(0.0),
     });
 
     Ok(())
@@ -343,18 +362,18 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
     let params = water_params(engine)?;
 
     // Scope the GameState borrow so it ends before kick_water borrows the engine again
-    let detonated_bombs: Vec<(f32, f32)> = {
+    let detonated_bombs: Vec<(f32, f32, f32)> = {
         let game_state = engine.get_global_component_mut::<GameState>()?;
 
         for bomb in &mut game_state.bombs {
             bomb.time_to_detonate -= delta_time;
         }
 
-        let detonated_bombs: Vec<(f32, f32)> = game_state
+        let detonated_bombs: Vec<(f32, f32, f32)> = game_state
             .bombs
             .iter()
             .filter(|bomb| bomb.time_to_detonate <= 0.0)
-            .map(|bomb| (bomb.x, bomb.y))
+            .map(|bomb| (bomb.x, bomb.y, bomb.power))
             .collect();
 
         // Remove bombs that have detonated
@@ -364,8 +383,14 @@ fn update_bombs(engine: &mut Engine) -> Result<()> {
     };
 
     // Kick the water points based on the detonated bombs
-    for (x, y) in detonated_bombs {
-        kick_water(engine, x, y, params.kick_strength, params.influence_radius)?;
+    for (x, y, power) in detonated_bombs {
+        kick_water(
+            engine,
+            x,
+            y,
+            params.kick_strength * power,
+            params.influence_radius,
+        )?;
     }
 
     Ok(())

@@ -58,6 +58,9 @@ const DIVE_BURST_THRUST_MULTIPLIER: f32 = 16.0;
 // This is physical ballast, not a fake restoring torque.
 pub(crate) const HULL_GEOMETRY_MASS_FRACTION: f32 = 0.15;
 
+/// Minimum time between two surfacing bombs (the effects system applies it per event type).
+const SURFACING_BOMB_COOLDOWN: f32 = 1.0;
+
 /// Every tunable of the ship physics, live-edited from the "Player physics" egui window.
 #[derive(Clone, Debug)]
 pub struct PlayerPhysicsParams {
@@ -101,6 +104,12 @@ pub struct PlayerPhysicsParams {
     /// floating ship sits slightly below the water, so this offset keeps it in the green
     /// "on the surface" state while normal dives go red.
     pub particle_underwater_depth: f32,
+    /// When a ship breaks the surface from under the water with a buoyancy force above this
+    /// threshold, a bomb is dropped at that spot. The bomb power scales with the force.
+    pub bomb_force_threshold: f32,
+    /// Multiplier for how strongly the bomb power follows the surfacing force:
+    /// `power = (force / threshold) * bomb_power_scale`.
+    pub bomb_power_scale: f32,
     //Drag coefficients for the water
     //Linear drag force
     pub water_drag_linear: f32, // F = c1*v
@@ -134,6 +143,8 @@ impl Default for PlayerPhysicsParams {
             particle_surface_center: 0.2,
             particle_surface_band: 0.4,
             particle_underwater_depth: 2.5,
+            bomb_force_threshold: 400.0,
+            bomb_power_scale: 1.0,
             water_drag_linear: 10.0,
             water_drag_quadratic: 0.0,
         }
@@ -489,8 +500,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
     let input = engine.get_global_component::<InputComponent>()?;
     let keyboard_x =
         (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
-    let keyboard_dive =
-        input.get_key(KeyboardKey::KeyS);
+    let keyboard_dive = input.get_key(KeyboardKey::KeyS);
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
     let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
@@ -501,7 +511,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
             movement_y: input.get_gamepad_button_pressed(id, GamepadButton::A)
-                || ( i == 0 && keyboard_dive),
+                || (i == 0 && keyboard_dive),
             drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::X)
                 || (i == 0 && keyboard_bomb),
             horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
@@ -612,6 +622,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 player.last_thrust_direction,
                 floating.in_water,
                 floating.water_level,
+                floating.was_fully_submerged,
+                floating.submersion,
+                floating.buoyancy_force,
+                floating.previous_buoyancy_force,
             ));
         }
     }
@@ -634,6 +648,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             last_thrust_direction,
             in_water,
             water_level,
+            was_fully_submerged,
+            submersion,
+            buoyancy_force,
+            previous_buoyancy_force,
         ) in ships
         {
             // Preserve the previous state if this body is missing from the physics world.
@@ -653,6 +671,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 last_thrust_direction,
                 in_water,
                 water_level,
+                was_fully_submerged,
+                submersion,
+                buoyancy_force,
+                previous_buoyancy_force,
                 body.translation(),
             ));
         }
@@ -664,6 +686,8 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     let mut facing_updates = [None; NUM_PLAYERS as usize];
     // (thrusting, input axis, water level) per player, forwarded to the particle emitters.
     let mut emitter_states = [(false, 0.0f32, 0.0f32); NUM_PLAYERS as usize];
+    // Bombs queued by ships breaking the surface: (world x, water level, power).
+    let mut surfacing_bombs: Vec<(f32, f32, f32)> = Vec::new();
     {
         let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
@@ -676,6 +700,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             mut last_thrust_direction,
             in_water,
             water_level,
+            was_fully_submerged,
+            submersion,
+            buoyancy_force,
+            previous_buoyancy_force,
             _,
         ) in ship_states
         {
@@ -772,14 +800,33 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             body.recompute_mass_properties_from_colliders(&physics.collider_set);
 
             // Decide sprite facing using horizontal velocity, before applying forces.
-            facing_updates[player_index] =
-                desired_facing(-body.linvel().x, input_x, params.input_deadzone);
+            // Only while the ship can actually be pushed around (in water): in the air there is
+            // no thrust, just decaying coasting, so the sprite keeps the facing it took off with
+            // instead of flipping as the old velocity bleeds off.
+            facing_updates[player_index] = if in_water {
+                desired_facing(-body.linvel().x, input_x, params.input_deadzone)
+            } else {
+                None
+            };
 
             // Apply thrust along X
             // Horizontal thrust needs water contact; diving (S) thrusts regardless.
-            let thrusting = (input_x.abs() > params.input_deadzone && in_water)
-                || input_y;
+            let thrusting = (input_x.abs() > params.input_deadzone && in_water) || input_y;
             emitter_states[player_index] = (thrusting, input_x, water_level);
+
+            // Surfacing: the ship just left the water after being completely under it, moving
+            // upwards through the surface. When the force that launched it is strong enough, a
+            // bomb is dropped into the water right there; its power scales with that force.
+            let fully_submerged_now = submersion >= 0.999;
+            let moving_up = body.linvel().y > 0.0;
+            if was_fully_submerged && !fully_submerged_now && moving_up {
+                let force = previous_buoyancy_force.max(buoyancy_force);
+                if force > params.bomb_force_threshold {
+                    let power =
+                        (force / params.bomb_force_threshold.max(0.0001)) * params.bomb_power_scale;
+                    surfacing_bombs.push((body.translation().x, water_level, power));
+                }
+            }
 
             // Horizontal thrust is only available in water. There is no upward
             // thrust: buoyancy alone lifts the ship and still allows jumps.
@@ -856,6 +903,16 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             next_thrust_direction[player_index] = last_thrust_direction;
         }
     } // Release mutable physics-world borrow before accessing ECS sprites.
+
+    // Queue the surfacing bombs now that the physics borrow is released. The effects system owns
+    // the 1 s per-type cooldown and drops the water kick when the event is processed.
+    for (x, y, power) in surfacing_bombs {
+        crate::effects::push_effect_with_cooldown(
+            engine,
+            crate::effects::EffectEvent::Bomb(crate::effects::BombEvent::immediate(x, y, power)),
+            SURFACING_BOMB_COOLDOWN,
+        )?;
+    }
 
     // Flip sprites after releasing the Rapier borrow.
     // `set_flip(horizontal, vertical)` — don't flip the ship upside down.
