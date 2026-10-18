@@ -129,6 +129,12 @@ impl SoundData {
             sound_source.push(*buffer);
         }
 
+        //        println!(
+        //            "Decoding sound: {} bytes, header: {:02X?}",
+        //            self.source_buffer.len(),
+        //            &self.source_buffer[..self.source_buffer.len().min(16)]
+        //        );
+        //
         // Return decoded bytes as the sound, which can be played
         Decoder::new(Cursor::new(sound_source)).unwrap()
     }
