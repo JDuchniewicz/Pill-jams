@@ -1,5 +1,7 @@
 use crate::background_pass::{BackgroundQuadPass, SkyParams};
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
+use crate::player::PlayerPhysicsComponent;
+use crate::water::WaterParamsComponent;
 use crate::water_mesh::WaterLookParams;
 use pill_engine::{define_global_component, game::*};
 
@@ -58,6 +60,16 @@ impl PillGame for Game {
         let show_uv2 = Arc::new(Mutex::new(false));
         let sky = Arc::new(Mutex::new(SkyParams::default()));
         let water_look = Arc::new(Mutex::new(WaterLookParams::default()));
+        // Shared with `player::player_movement_system`; created in `player::start`.
+        let player_physics = engine
+            .get_global_component::<PlayerPhysicsComponent>()?
+            .params
+            .clone();
+        // Shared with the water simulation systems; created in `water::start`.
+        let water_params = engine
+            .get_global_component::<WaterParamsComponent>()?
+            .params
+            .clone();
         engine.add_global_component(GameUIStateComponent {
             ortho_size: Arc::clone(&ortho_size),
             draw_sprite_bounds: Arc::clone(&draw_sprite_bounds),
@@ -169,6 +181,228 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut water_look.foam_intensity, 0.0..=2.0)
                                     .step_by(0.05)
                                     .text("Foam intensity ×UV2"),
+                            );
+                        });
+                });
+
+            // --- Player physics: floating panel pinned to the right edge of the window ---
+            let mut player_physics = player_physics
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            egui::Window::new("Player physics")
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 160.0))
+                .resizable(true)
+                .default_width(280.0)
+                .show(ctx, |ui| {
+                    egui::CollapsingHeader::new("Hull & mass")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.hull_half_width, 0.1..=5.0)
+                                    .text("Hull half width"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.hull_half_height, 0.05..=2.0)
+                                    .text("Hull half height"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.hull_half_depth, 0.05..=2.0)
+                                    .text("Hull half depth"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.ship_mass, 0.1..=100.0)
+                                    .text("Ship mass"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.friction, 0.0..=2.0)
+                                    .text("Friction"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.restitution, 0.0..=1.0)
+                                    .text("Restitution"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Rigid body")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.linear_damping, 0.0..=20.0)
+                                    .text("Linear damping"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.angular_damping, 0.0..=20.0)
+                                    .text("Angular damping"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.gravity_scale, 0.0..=5.0)
+                                    .text("Gravity scale"),
+                            );
+                            ui.checkbox(&mut player_physics.ccd_enabled, "CCD enabled");
+                        });
+
+                    egui::CollapsingHeader::new("Forces")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.thrust_force, 0.0..=3000.0)
+                                    .text("Thrust force"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.input_deadzone, 0.0..=1.0)
+                                    .text("Input dead zone"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.buoyancy_strength,
+                                    0.0..=1000.0,
+                                )
+                                .text("Buoyancy strength"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.wave_slope_strength,
+                                    0.0..=1000.0,
+                                )
+                                .text("Wave slope force"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.slope_clamp, 0.0..=5.0)
+                                    .text("Slope clamp"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Hull samples")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.hull_sample_x, 0.0..=2.0)
+                                    .text("Sample X"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.hull_sample_y, 0.0..=2.0)
+                                    .text("Sample Y"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut player_physics.hull_center_y, 0.0..=2.0)
+                                    .text("Centre sample Y"),
+                            );
+                        });
+                });
+
+            // --- Water simulation parameters ---
+            let mut water_params = water_params
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            egui::Window::new("Water simulation")
+                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 470.0))
+                .resizable(true)
+                .default_width(280.0)
+                .show(ctx, |ui| {
+                    egui::CollapsingHeader::new("Wave equation")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut water_params.wave_speed, 0.05..=5.0)
+                                    .text("Wave speed"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_params.damping, 0.0..=2.0)
+                                    .text("Damping"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_params.restoring_force, 0.0..=5.0)
+                                    .text("Restoring force"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_params.baseline_restore_rate,
+                                    0.0..=10.0,
+                                )
+                                .text("Baseline restore rate"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Kicks & bombs")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut water_params.kick_strength, 0.0..=500.0)
+                                    .text("Kick strength"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_params.influence_radius, 0.01..=0.5)
+                                    .text("Influence radius"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_params.time_to_detonate, 0.0..=5.0)
+                                    .text("Bomb fuse (s)"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Swells")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut water_params.swell_interval_min, 0.1..=10.0)
+                                    .text("Interval min (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_params.swell_interval_max, 0.1..=10.0)
+                                    .text("Interval max (s)"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_params.swell_strength_min,
+                                    0.0..=100.0,
+                                )
+                                .text("Strength min"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_params.swell_strength_max,
+                                    0.0..=100.0,
+                                )
+                                .text("Strength max"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_params.swell_direction_spread,
+                                    0.0..=1.0,
+                                )
+                                .text("Direction spread"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_params.swell_direction_jitter,
+                                    0.0..=1.0,
+                                )
+                                .text("Direction jitter"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Edge waves")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut water_params.wave_pool_interval, 0.1..=10.0)
+                                    .text("Interval (s)"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("Surface query")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut water_params.height_sample_window,
+                                    0.0..=0.5,
+                                )
+                                .text("Sample window"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_params.height_sample_limit, 1..=128)
+                                    .text("Sample limit"),
                             );
                         });
                 });

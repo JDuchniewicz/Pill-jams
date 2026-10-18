@@ -1,16 +1,77 @@
-use pill_engine::{define_component, game::*};
+use pill_engine::{define_component, define_global_component, game::*};
 
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
-const BUOYANCY_STRENGTH: f32 = 100.0;
-const SHIP_MASS: f32 = 10.0;
-const WAVE_SLOPE_STRENGTH: f32 = 100.0;
+
+use std::sync::{Arc, Mutex};
+
 define_component!(PlayerComponent { id: PlayerId });
+
+// Live-tunable ship physics parameters, shared between the physics system and the
+// "Player physics" egui window.
+define_global_component!(PlayerPhysicsComponent {
+    params: Arc<Mutex<PlayerPhysicsParams>>,
+});
 
 // TODO: for now we are playing locally -> maybe also play over network
 const NUM_PLAYERS: u8 = 2;
-const THRUST_FORCE: f32 = 750.0;
-const DZ: f32 = 0.1;
+
+/// Every tunable of the ship physics, live-edited from the "Player physics" egui window.
+#[derive(Clone, Debug)]
+pub struct PlayerPhysicsParams {
+    /// Hull collision box half extents (local space).
+    pub hull_half_width: f32,
+    pub hull_half_height: f32,
+    pub hull_half_depth: f32,
+    /// Mass applied to the hull collider.
+    pub ship_mass: f32,
+    /// Hull collision surface properties.
+    pub friction: f32,
+    pub restitution: f32,
+    /// Rigid body damping and gravity scaling.
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub gravity_scale: f32,
+    pub ccd_enabled: bool,
+    /// Thrust applied along X and the stick dead zone below which no thrust is applied.
+    pub thrust_force: f32,
+    pub input_deadzone: f32,
+    /// Upward force per world unit of hull submersion depth.
+    pub buoyancy_strength: f32,
+    /// Sideways force that makes the ship slide down the water slope.
+    pub wave_slope_strength: f32,
+    /// The water slope is clamped to ±this before it becomes a force.
+    pub slope_clamp: f32,
+    /// Hull sample points (local space): outer X/Y and the centre point's Y.
+    pub hull_sample_x: f32,
+    pub hull_sample_y: f32,
+    pub hull_center_y: f32,
+}
+
+impl Default for PlayerPhysicsParams {
+    fn default() -> Self {
+        Self {
+            hull_half_width: 1.0,
+            hull_half_height: 0.25,
+            hull_half_depth: 0.3,
+            ship_mass: 10.0,
+            friction: 0.4,
+            restitution: 0.0,
+            linear_damping: 5.0,
+            angular_damping: 3.0,
+            gravity_scale: 1.0,
+            ccd_enabled: true,
+            thrust_force: 750.0,
+            input_deadzone: 0.1,
+            buoyancy_strength: 100.0,
+            wave_slope_strength: 100.0,
+            slope_clamp: 1.0,
+            hull_sample_x: 0.8,
+            hull_sample_y: 0.22,
+            hull_center_y: 0.25,
+        }
+    }
+}
 
 pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     engine.register_component::<RigidBodyComponent>(active_scene)?;
@@ -19,6 +80,16 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
 
     engine.add_system("player_movement_system", player_movement_system)?;
     engine.add_system("submerge_system", submerge_system)?;
+
+    // Shared, live-editable physics parameters (also read by the "Player physics" egui window).
+    let player_physics = Arc::new(Mutex::new(PlayerPhysicsParams::default()));
+    engine.add_global_component(PlayerPhysicsComponent {
+        params: Arc::clone(&player_physics),
+    })?;
+    let physics = player_physics
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
 
     let ship_texture_handle = engine.add_resource::<Texture>(Texture::new(
         "ship_test",
@@ -48,22 +119,26 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(
             RigidBodyComponent::builder()
                 .body_type(RigidBodyType::Dynamic)
-                .linear_damping(5.0)
-                .angular_damping(3.0)
+                .linear_damping(physics.linear_damping)
+                .angular_damping(physics.angular_damping)
                 .locked_axes(
                     LockedAxes::TRANSLATION_LOCKED_Z
                         | LockedAxes::ROTATION_LOCKED_X
                         | LockedAxes::ROTATION_LOCKED_Y,
                 )
-                .ccd_enabled(true)
+                .ccd_enabled(physics.ccd_enabled)
                 .build(),
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(SharedShape::cuboid(1.0, 0.25, 0.3))
-                .friction(0.4)
-                .restitution(0.0)
-                .mass(SHIP_MASS)
+                .shape(SharedShape::cuboid(
+                    physics.hull_half_width,
+                    physics.hull_half_height,
+                    physics.hull_half_depth,
+                ))
+                .friction(physics.friction)
+                .restitution(physics.restitution)
+                .mass(physics.ship_mass)
                 .build(),
         )
         .with_component(PlayerComponent {
@@ -92,22 +167,26 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         .with_component(
             RigidBodyComponent::builder()
                 .body_type(RigidBodyType::Dynamic)
-                .linear_damping(5.0)
-                .angular_damping(3.0)
+                .linear_damping(physics.linear_damping)
+                .angular_damping(physics.angular_damping)
                 .locked_axes(
                     LockedAxes::TRANSLATION_LOCKED_Z
                         | LockedAxes::ROTATION_LOCKED_X
                         | LockedAxes::ROTATION_LOCKED_Y,
                 )
-                .ccd_enabled(true)
+                .ccd_enabled(physics.ccd_enabled)
                 .build(),
         )
         .with_component(
             ColliderComponent::builder()
-                .shape(SharedShape::cuboid(1.0, 0.25, 0.3))
-                .friction(0.4)
-                .restitution(0.0)
-                .mass(SHIP_MASS)
+                .shape(SharedShape::cuboid(
+                    physics.hull_half_width,
+                    physics.hull_half_height,
+                    physics.hull_half_depth,
+                ))
+                .friction(physics.friction)
+                .restitution(physics.restitution)
+                .mass(physics.ship_mass)
                 .build(),
         )
         .with_component(PlayerComponent {
@@ -119,10 +198,23 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
 }
 
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
-    const HULL_POINTS: [Vector3f; 3] = [
-        Vector3f::new(-0.8, -0.22, 0.0),
-        Vector3f::new(0.0, -0.25, 0.0),
-        Vector3f::new(0.8, -0.22, 0.0),
+    // Copy the shared params out so no lock is held while the physics world is borrowed.
+    let params = {
+        let shared = engine
+            .get_global_component::<PlayerPhysicsComponent>()?
+            .params
+            .clone();
+        let guard = shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.clone()
+    };
+
+    // Hull sample points are derived from the tunables (outer X/Y and the centre point's Y).
+    let hull_points: [Vector3f; 3] = [
+        Vector3f::new(-params.hull_sample_x, -params.hull_sample_y, 0.0),
+        Vector3f::new(0.0, -params.hull_center_y, 0.0),
+        Vector3f::new(params.hull_sample_x, -params.hull_sample_y, 0.0),
     ];
     // Gather input first: the immutable `InputComponent` borrow must end before `add_bomb`,
     // which borrows `GameState` mutably.
@@ -181,13 +273,13 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         let mut water_samples = [(0.0f32, 0.0f32); 3];
         // calculate the force triplet
         let mut point_buoyancy_forces = Vec::with_capacity(3);
-        for (i, local_point) in HULL_POINTS.iter().enumerate() {
+        for (i, local_point) in hull_points.iter().enumerate() {
             let world_point = player_position + player_rotation * local_point;
             water_samples[i] = (world_point.x, water_height_at_x(engine, world_point.x)?);
 
             let point_buoyancy_force = if world_point.y < water_samples[i].1 {
                 let depth = water_samples[i].1 - world_point.y;
-                Vector3f::new(0.0, depth * BUOYANCY_STRENGTH, 0.0)
+                Vector3f::new(0.0, depth * params.buoyancy_strength, 0.0)
             } else {
                 Vector3f::new(0.0, 0.0, 0.0)
             };
@@ -210,12 +302,63 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             continue;
         };
 
+        // Live tuning: push changed values into the Rapier body (only when they differ, so the
+        // body is not woken up every frame).
+        if (body.linear_damping() - params.linear_damping).abs() > 1.0e-6 {
+            body.set_linear_damping(params.linear_damping);
+        }
+        if (body.angular_damping() - params.angular_damping).abs() > 1.0e-6 {
+            body.set_angular_damping(params.angular_damping);
+        }
+        if (body.gravity_scale() - params.gravity_scale).abs() > 1.0e-6 {
+            body.set_gravity_scale(params.gravity_scale, true);
+        }
+        if body.is_ccd_enabled() != params.ccd_enabled {
+            body.enable_ccd(params.ccd_enabled);
+        }
+
+        // Same for the hull colliders: shape, surface properties and mass.
+        let collider_handles = body.colliders().to_vec();
+        for collider_handle in collider_handles {
+            let Some(collider) = physics.collider_set.get_mut(collider_handle) else {
+                continue;
+            };
+
+            let shape_changed = match collider.shape().as_cuboid() {
+                Some(cuboid) => {
+                    (cuboid.half_extents.x - params.hull_half_width).abs() > 1.0e-6
+                        || (cuboid.half_extents.y - params.hull_half_height).abs() > 1.0e-6
+                        || (cuboid.half_extents.z - params.hull_half_depth).abs() > 1.0e-6
+                }
+                None => true,
+            };
+            if shape_changed {
+                collider.set_shape(SharedShape::cuboid(
+                    params.hull_half_width,
+                    params.hull_half_height,
+                    params.hull_half_depth,
+                ));
+            }
+            if (collider.friction() - params.friction).abs() > 1.0e-6 {
+                collider.set_friction(params.friction);
+            }
+            if (collider.restitution() - params.restitution).abs() > 1.0e-6 {
+                collider.set_restitution(params.restitution);
+            }
+            if (collider.mass() - params.ship_mass).abs() > 1.0e-6 {
+                collider.set_mass(params.ship_mass);
+            }
+        }
+
         body.reset_forces(true);
         body.reset_torques(true);
 
         // Apply thrust along X
-        if input_x.abs() > DZ {
-            body.add_force(Vector3f::new(-input_x * THRUST_FORCE, 0.0, 0.0), true);
+        if input_x.abs() > params.input_deadzone {
+            body.add_force(
+                Vector3f::new(-input_x * params.thrust_force, 0.0, 0.0),
+                true,
+            );
         }
 
         let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
@@ -230,7 +373,12 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         // Add the force of going up or down the slope
         if in_water {
             body.add_force(
-                Vector3f::new(-slope.clamp(-1.0, 1.0) * WAVE_SLOPE_STRENGTH, 0.0, 0.0),
+                Vector3f::new(
+                    -slope.clamp(-params.slope_clamp, params.slope_clamp)
+                        * params.wave_slope_strength,
+                    0.0,
+                    0.0,
+                ),
                 true,
             );
         }
