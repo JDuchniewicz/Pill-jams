@@ -3,6 +3,7 @@ mod cartoon_pass;
 mod game;
 mod player;
 mod post_process;
+mod sounds;
 mod visuals;
 mod water;
 mod water_mesh;
