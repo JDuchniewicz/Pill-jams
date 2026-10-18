@@ -16,7 +16,6 @@ define_component!(PlayerComponent {
     flip: i32,
     dive_hold_time: f32,
     dive_was_held: bool,
-    under_water: bool,
 });
 
 // Live-tunable ship physics parameters, shared between the physics system and the
@@ -50,9 +49,9 @@ const AIR_DRAG_DECEL: f32 = 0.5; // deceleration factor when ship is in air
 
 const DIVE_CHARGE_MAX: f32 = 5.0;
 const DIVE_CHARGE_MULTIPLIER: f32 = 10.0; // how fast the dive charge builds up
-// Downward force applied during the release burst, as a multiple of thrust_force.
-// A sustained force is needed: a single impulse is cancelled almost immediately
-// by the quadratic water drag.
+                                          // Downward force applied during the release burst, as a multiple of thrust_force.
+                                          // A sustained force is needed: a single impulse is cancelled almost immediately
+                                          // by the quadratic water drag.
 const DIVE_BURST_THRUST_MULTIPLIER: f32 = 16.0;
 // Keep the total mass at `ship_mass`, but concentrate most of it near the ship
 // origin (below the painted hull), rather than the centroid of the raised shape.
@@ -274,7 +273,6 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             air_time: 0.0,
             dive_hold_time: 0.0,
             dive_was_held: false,
-            under_water: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
         .with_component(
@@ -333,7 +331,6 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             air_time: 0.0,
             dive_hold_time: 0.0,
             dive_was_held: false,
-            under_water: false,
         })
         .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
         .with_component(
