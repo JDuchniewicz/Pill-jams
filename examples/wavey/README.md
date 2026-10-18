@@ -31,6 +31,12 @@ The in-game UI exposes live water, ship physics and visual-effect settings. Ship
 
 ## TODO
 
+- [ ] Add a damage indicator UI and numbers floating
+- [ ] Decide when a ship is ded and how to indicate that
+- [ ] You can shoot someone so fast that they die instantly - anime like
+- [ ] Destroying crates when you run over them with high force
+- [ ] Decide about the meta of the game - what are the conditions for winning etc
+- [ ] How to carry the crates -> do we change the sprite or do we just load them on the barges
 - [ ] Fix gamepad `A` hold-to-charge diving (currently uses a just-pressed input).
 - [ ] Tune buoyancy, mass and colliders separately for ships, ducks and crates.
 - [ ] Investigate FPS drops when spawning lots of crates.
