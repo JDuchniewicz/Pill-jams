@@ -159,6 +159,17 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut water_look.highlight_threshold, 0.0..=1.0)
                                     .text("Overlay threshold"),
                             );
+
+                            color_row(ui, "Foam color", &mut water_look.foam_color);
+                            ui.add(
+                                egui::Slider::new(&mut water_look.foam_depth, 0.0..=1.0)
+                                    .text("Foam depth"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut water_look.foam_intensity, 0.0..=2.0)
+                                    .step_by(0.05)
+                                    .text("Foam intensity ×UV2"),
+                            );
                         });
                 });
         })?;

@@ -27,6 +27,14 @@ pub struct WaterLookParams {
     pub highlight_bottom: [f32; 3],
     /// The overlay is applied where the (inverted) depth value is above this threshold.
     pub highlight_threshold: f32,
+    /// Foam colour, blended on top inside the foam band, weighted by the second UV set.
+    pub foam_color: [f32; 3],
+    /// Lower bound of the (inverted) depth band where foam appears: higher values are nearer the
+    /// surface. The band fades in with `smoothstep` up to the surface.
+    pub foam_depth: f32,
+    /// Multiplier applied to the second-UV value (horizontal velocity) to scale how much foam
+    /// the motion produces — foam is multiplied by the UV value rather than thresholded by it.
+    pub foam_intensity: f32,
 }
 
 impl Default for WaterLookParams {
@@ -37,6 +45,9 @@ impl Default for WaterLookParams {
             highlight_top: [0.55, 0.85, 0.95],
             highlight_bottom: [0.25, 0.60, 0.80],
             highlight_threshold: 0.95,
+            foam_color: [0.95, 0.98, 1.0],
+            foam_depth: 0.93,
+            foam_intensity: 2.0,
         }
     }
 }
@@ -225,7 +236,7 @@ impl Pass for WaterMeshPass {
         })?;
         let look_buffer = renderer.create_buffer(BufferDesc {
             label: Some("water_mesh_pass_look"),
-            byte_size: std::mem::size_of::<[[f32; 4]; 5]>() as u64,
+            byte_size: std::mem::size_of::<[[f32; 4]; 7]>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })?;
         let frame_bind_group =
@@ -367,7 +378,7 @@ impl Pass for WaterMeshPass {
             bytemuck::cast_slice(&heights),
         );
 
-        let look_uniform: [[f32; 4]; 5] = [
+        let look_uniform: [[f32; 4]; 7] = [
             [look.top_color[0], look.top_color[1], look.top_color[2], 1.0],
             [
                 look.bottom_color[0],
@@ -393,6 +404,13 @@ impl Pass for WaterMeshPass {
                 WATER_GRADIENT_BOTTOM_Y,
                 0.0,
             ],
+            [
+                look.foam_color[0],
+                look.foam_color[1],
+                look.foam_color[2],
+                1.0,
+            ],
+            [look.foam_depth, look.foam_intensity, 0.0, 0.0],
         ];
         queue.write_buffer(&state.look_buffer, 0, bytemuck::bytes_of(&look_uniform));
         let surface_params: [u32; 8] = [

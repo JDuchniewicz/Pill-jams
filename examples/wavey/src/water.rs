@@ -80,6 +80,10 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
+    // World-space spacing between neighbouring points (used to turn the surface slope into a
+    // world-space horizontal velocity).
+    let dx_world = dx * (WATER_X_MAX - WATER_X_MIN);
+
     // Explicit integration is only stable while WAVE_SPEED * dt / dx <= 1.
     // Subdivide the frame so every substep stays well inside that bound.
     let max_dt = 0.5 * dx / WAVE_SPEED;
@@ -117,6 +121,11 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
             points[i].velocity = (points[i].velocity + 0.5 * acceleration * step_dt) * damping;
             points[i].y = center;
             points[i].vertical_velocity_delta = acceleration * step_dt;
+
+            // Horizontal velocity of the surface: a wave travelling at `WAVE_SPEED` pushes the
+            // water sideways proportionally to the surface slope (−c · ∂y/∂x).
+            let slope = (points[i + 1].y - points[i - 1].y) / (2.0 * dx_world.max(0.00001));
+            points[i].horizontal_velocity_delta = -WAVE_SPEED * slope;
         }
 
         // Reflective boundaries: ends are fixed
@@ -126,6 +135,8 @@ fn evolve_waves(engine: &mut Engine) -> Result<()> {
         points[0].vertical_velocity_delta = 0.0;
         points[n - 1].velocity = 0.0;
         points[n - 1].y = 0.0;
+        points[n - 1].horizontal_velocity_delta = 0.0;
+        points[n - 1].vertical_velocity_delta = 0.0;
     }
 
     // Safety net: never let non-finite values reach the mesh builder.

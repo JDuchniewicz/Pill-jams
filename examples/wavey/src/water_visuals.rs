@@ -68,7 +68,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
 /// keeps rendered vertices aligned with the stored water points. The points are emitted right to
 /// left so that, after the mirroring, local X increases along the strip (CCW winding).
 ///
-/// Also builds the second UV set: `[vertical_velocity_delta, 0]` per surface point.
+/// Also builds the second UV set: `[horizontal velocity, 0]` per surface point.
 fn water_rows(water_points: &[WaterPoint]) -> (Vec<Vector2f>, Vec<Vector2f>, Vec<[f32; 2]>) {
     let mut top = Vec::with_capacity(water_points.len());
     let mut bottom = Vec::with_capacity(water_points.len());
@@ -79,7 +79,7 @@ fn water_rows(water_points: &[WaterPoint]) -> (Vec<Vector2f>, Vec<Vector2f>, Vec
         top.push(Vector2f::new(x, point.y));
         // Flat bottom: every bottom vertex sits on the same horizontal line
         bottom.push(Vector2f::new(x, WATER_BOTTOM_Y));
-        uv2.push([point.vertical_velocity_delta, 0.0]);
+        uv2.push([point.horizontal_velocity_delta, 0.0]);
     }
 
     (top, bottom, uv2)

@@ -24,6 +24,8 @@ struct WaterLook {
     float4 highlight_top;    // rgb = overlay colour at the top of the gradient
     float4 highlight_bottom; // rgb = overlay colour at the bottom
     float4 params;           // x = highlight threshold, y = gradient top Y, z = gradient bottom Y
+    float4 foam_color;       // rgb = foam colour
+    float4 foam;             // x = foam depth threshold, y = multiplier for the UV2 velocity value
 };
 [[vk::binding(4, 0)]] ConstantBuffer<WaterLook> water_look;
 
@@ -31,17 +33,17 @@ struct FragmentInput {
     [[vk::location(0)]] float2 uv       : TEXCOORD0;
     [[vk::location(1)]] float  world_x  : TEXCOORD1;
     [[vk::location(2)]] float  world_y  : TEXCOORD2;
-    // Second UV set (vertical velocity delta); available for effects
+    // Second UV set (water point horizontal velocity); available for effects
     [[vk::location(3)]] float2 velocity : TEXCOORD3;
                          float4 sv_position : SV_POSITION;
 };
 
 [shader("fragment")]
 float4 fs_main(FragmentInput input) : SV_Target {
-    // Debug view: visualise the second UV set (TEXCOORD1, the per-vertex velocity stream)
+    // Debug view: visualise the second UV set (TEXCOORD1, the per-vertex point velocity stream)
     // instead of the normal water shading.
     if (surface_params.uv2_view != 0u) {
-        // x holds the vertical velocity delta; log-scaled so small wave values and large
+        // x holds the horizontal velocity; log-scaled so small wave values and large
         // kick values are both visible. Positive = green, negative = red, zero = dark grey.
         float value = input.velocity.x;
         float intensity = saturate(log2(1.0 + abs(value)) / 8.0);
@@ -73,6 +75,15 @@ float4 fs_main(FragmentInput input) : SV_Target {
     // Light overlay gradient in the areas above the threshold (near the surface)
     float3 overlay_gradient = lerp(water_look.highlight_bottom.rgb, water_look.highlight_top.rgb, gradient_t);
     float overlay = smoothstep(water_look.params.x, 1.0, height);
+    float3 color = lerp(base, overlay_gradient, overlay);
 
-    return float4(lerp(base, overlay_gradient, overlay), 1.0);
+    // Foam: a smooth band near the surface, scaled by the second UV set (horizontal velocity), so
+    // stronger motion produces more foam instead of a hard on/off threshold.
+    float foam_band = smoothstep(water_look.foam.x, 1.0, height);
+    float foam_amount = saturate(abs(input.velocity.x) * water_look.foam.y);
+    foam_amount = smoothstep(0.0, 1.0, foam_amount);
+    float foam = foam_band * foam_amount;
+    color = lerp(color, water_look.foam_color.rgb, foam);
+
+    return float4(color, 1.0);
 }
