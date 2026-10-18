@@ -71,7 +71,7 @@ impl Default for WaterLookParams {
             god_rays_speed: 0.02,
             god_rays_width: 0.15,
             god_rays_angle: 25.0,
-            god_rays_fade: 0.7,
+            god_rays_fade: 0.5,
         }
     }
 }

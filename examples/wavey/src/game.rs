@@ -70,6 +70,12 @@ impl PillGame for Game {
             .get_global_component::<PlayerPhysicsComponent>()?
             .params
             .clone();
+        // Live emission-point height (relative to the water surface) per player, shown in the
+        // particle surface UI section.
+        let player_emission_height = engine
+            .get_global_component::<PlayerPhysicsComponent>()?
+            .emission_height
+            .clone();
         // Shared with the water simulation systems; created in `water::start`.
         let water_params = engine
             .get_global_component::<WaterParamsComponent>()?
@@ -357,6 +363,42 @@ impl PillGame for Game {
                                 egui::Slider::new(&mut player_physics.hull_center_y, 0.0..=2.0)
                                     .text("Centre sample Y"),
                             );
+                        });
+
+                    // The emitter always runs; these control the water-surface band that decides
+                    // each particle's opacity at spawn time.
+                    egui::CollapsingHeader::new("Particle surface")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.particle_surface_center,
+                                    -4.0..=1.0,
+                                )
+                                .step_by(0.01)
+                                .text("Emission height"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.particle_surface_band,
+                                    0.0..=1.5,
+                                )
+                                .step_by(0.01)
+                                .text("Surface band ±"),
+                            );
+                            let height = player_emission_height
+                                .lock()
+                                .map(|heights| heights[0])
+                                .unwrap_or(f32::NAN);
+                            let center = player_physics.particle_surface_center;
+                            let band = player_physics.particle_surface_band.max(0.0);
+                            let on_surface = (height - center).abs() <= band;
+                            ui.label(format!(
+                                "P0 emission height: {height:.2} | band {:.2}..{:.2} ({})",
+                                center - band,
+                                center + band,
+                                if on_surface { "visible" } else { "transparent" }
+                            ));
                         });
                 });
 

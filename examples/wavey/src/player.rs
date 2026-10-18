@@ -1,16 +1,22 @@
 use pill_engine::{define_component, define_global_component, game::*};
 
+use crate::particle_system::ParticleSystemComponent;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 
 use std::sync::{Arc, Mutex};
 
-define_component!(PlayerComponent { id: PlayerId });
+define_component!(PlayerComponent {
+    id: PlayerId,
+    flip: i32
+});
 
 // Live-tunable ship physics parameters, shared between the physics system and the
 // "Player physics" egui window.
 define_global_component!(PlayerPhysicsComponent {
     params: Arc<Mutex<PlayerPhysicsParams>>,
+    // Emission point height relative to the water surface, per player (read by the UI).
+    emission_height: Arc<Mutex<[f32; NUM_PLAYERS as usize]>>,
 });
 
 // TODO: for now we are playing locally -> maybe also play over network
@@ -70,6 +76,13 @@ pub struct PlayerPhysicsParams {
     /// Local height ABOVE the hull's physical bottom for the outer/center samples.
     pub hull_sample_y: f32,
     pub hull_center_y: f32,
+    /// Height of the emission point relative to the water surface that counts as "on the surface".
+    /// Particles spawned with `|emission_height - center| <= band` are drawn at 0.8 opacity, all
+    /// others at 0.0. A floating ship's origin sits roughly -1.55 world units below the water, so
+    /// that is the default centre.
+    pub particle_surface_center: f32,
+    /// Half-width of the surface band, in world units.
+    pub particle_surface_band: f32,
     //Drag coefficients for the water
     //Linear drag force
     pub water_drag_linear: f32, // F = c1*v
@@ -98,6 +111,9 @@ impl Default for PlayerPhysicsParams {
             hull_sample_x: 0.8,
             hull_sample_y: 0.22,
             hull_center_y: 0.25,
+            // Measured resting emission height of a floating ship (origin bobs around -1.45).
+            particle_surface_center: -1.45,
+            particle_surface_band: 0.2,
             water_drag_linear: 10.0,
             water_drag_quadratic: 10.0,
         }
@@ -167,10 +183,14 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
     engine.add_system("player_movement_system", player_movement_system)?;
     engine.add_system("submerge_system", submerge_system)?;
 
+    // Particle emitters live on the player entities; the pass draws every emitter in one call.
+    crate::particle_system::start(engine, active_scene)?;
+
     // Shared, live-editable physics parameters (also read by the "Player physics" egui window).
     let player_physics = Arc::new(Mutex::new(PlayerPhysicsParams::default()));
     engine.add_global_component(PlayerPhysicsComponent {
         params: Arc::clone(&player_physics),
+        emission_height: Arc::new(Mutex::new([f32::NAN; NUM_PLAYERS as usize])),
     })?;
     let physics = player_physics
         .lock()
@@ -181,6 +201,11 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         "ship_test",
         TextureType::Color,
         ResourceLoader::Path("textures/ship_test.png".into()),
+    ))?;
+    let foam_texture_handle = engine.add_resource::<Texture>(Texture::new(
+        "foam_particle",
+        TextureType::Color,
+        ResourceLoader::Path("textures/foam_particle.png".into()),
     ))?;
 
     engine
@@ -223,7 +248,9 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         )
         .with_component(PlayerComponent {
             id: PlayerId::Player1,
+            flip: 1,
         })
+        .with_component(ParticleSystemComponent::new(foam_texture_handle))
         .build();
 
     // Player 2 is a camera-facing sprite; the transform drives its world position.
@@ -267,7 +294,9 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<()> {
         )
         .with_component(PlayerComponent {
             id: PlayerId::Player2,
+            flip: 1,
         })
+        .with_component(ParticleSystemComponent::new(foam_texture_handle))
         .build();
 
     engine
@@ -333,15 +362,14 @@ fn desired_facing(velocity_x: f32, input_x: f32, deadzone: f32) -> Option<bool> 
 
 fn player_movement_system(engine: &mut Engine) -> Result<()> {
     // Copy the shared params out so no lock is held while the physics world is borrowed.
-    let params = {
-        let shared = engine
-            .get_global_component::<PlayerPhysicsComponent>()?
-            .params
-            .clone();
-        let guard = shared
+    let (params, emission_heights) = {
+        let shared = engine.get_global_component::<PlayerPhysicsComponent>()?;
+        let params = shared.params.clone();
+        let emission_heights = shared.emission_height.clone();
+        let guard = params
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.clone()
+        (guard.clone(), emission_heights)
     };
 
     let hull_points = ship_buoyancy_points(&params);
@@ -410,17 +438,42 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         } else {
             0.0
         };
-        ship_forces.push((handle, player_index, input_x, point_buoyancy_forces, slope));
+        // Water level under the ship and the height of the emission point (the ship origin, since
+        // the emitter only offsets on X) relative to that water level.
+        let water_level = water_samples[1].1;
+        let emission_height = player_position.y - water_level;
+        ship_forces.push((
+            handle,
+            player_index,
+            input_x,
+            point_buoyancy_forces,
+            slope,
+            water_level,
+            emission_height,
+        ));
     }
     // Apply thrust and buoyancy to Rapier's bodies.
     // Construct the expected compound collider once, not every frame per ship.
+    // Publish the emission heights so the particle UI can display them live.
+    {
+        let mut heights = emission_heights
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for &(_, player_index, _, _, _, _, height) in &ship_forces {
+            heights[player_index] = height;
+        }
+    }
     let expected_hull_shape = ship_hull_shape(&params);
     let expected_aabb = expected_hull_shape.compute_local_aabb();
     let mut facing_updates = [None; NUM_PLAYERS as usize];
+    // (thrusting, input axis, water level) per player, forwarded to the particle emitters.
+    let mut emitter_states = [(false, 0.0f32, 0.0f32); NUM_PLAYERS as usize];
     {
         let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
 
-        for (handle, player_index, input_x, point_buoyancy_forces, slope) in ship_forces {
+        for (handle, player_index, input_x, point_buoyancy_forces, slope, water_level, _) in
+            ship_forces
+        {
             let Some(body) = physics.rigid_body_set.get_mut(handle) else {
                 continue;
             };
@@ -490,18 +543,21 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
 
+            let submerged_points = point_buoyancy_forces
+                .iter()
+                .filter(|(_, force)| force.y > 0.0)
+                .count();
+
             // Apply thrust along X
-            if input_x.abs() > params.input_deadzone && in_water {
+            let thrusting = input_x.abs() > params.input_deadzone && in_water;
+            if thrusting {
                 body.add_force(
                     Vector3f::new(-input_x * params.thrust_force, 0.0, 0.0),
                     true,
                 );
             }
+            emitter_states[player_index] = (thrusting, input_x, water_level);
 
-            let submerged_points = point_buoyancy_forces
-                .iter()
-                .filter(|(_, force)| force.y > 0.0)
-                .count();
             let submersion = submerged_points as f32 / point_buoyancy_forces.len() as f32;
             // Buoyancy pushes up while the player is below the water surface
             for (world_point, buoyancy_force) in point_buoyancy_forces {
@@ -542,8 +598,27 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         engine.iterate_two_components_mut::<SpriteRenderingComponent, PlayerComponent>()?
     {
         if let Some(horizontal_flip) = facing_updates[player.id as usize] {
-            sprite.set_flip(horizontal_flip, false);
+            if sprite.flip_x != horizontal_flip {
+                // About to mirror the sprite: mirror the player's x-facing flag as well.
+                player.flip = -player.flip;
+                sprite.set_flip(horizontal_flip, false);
+            }
         }
+    }
+
+    // Feed this frame's player state into the particle emitters attached to the players.
+    for (_, player, emitter) in
+        engine.iterate_two_components_mut::<PlayerComponent, ParticleSystemComponent>()?
+    {
+        let (thrusting, input_x, water_level) = emitter_states[player.id as usize];
+        emitter.update_from_player(
+            thrusting,
+            input_x,
+            player.flip,
+            water_level,
+            params.particle_surface_center,
+            params.particle_surface_band,
+        );
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();

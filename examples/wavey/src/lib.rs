@@ -1,6 +1,7 @@
 mod background_pass;
 mod cartoon_pass;
 mod game;
+mod particle_system;
 mod player;
 mod post_process;
 mod sounds;
