@@ -367,8 +367,8 @@ impl PillGame for Game {
                             );
                         });
 
-                    // The emitter always runs; these control the water-surface band that decides
-                    // each particle's opacity at spawn time.
+                    // The emitter runs while thrusting; these decide each particle's opacity at
+                    // spawn time (visible at/below the surface, fading out above it).
                     egui::CollapsingHeader::new("Particle surface")
                         .default_open(true)
                         .show(ui, |ui| {
@@ -378,7 +378,7 @@ impl PillGame for Game {
                                     -4.0..=1.0,
                                 )
                                 .step_by(0.01)
-                                .text("Emission height"),
+                                .text("Opaque below (0 = water)"),
                             );
                             ui.add(
                                 egui::Slider::new(
@@ -386,7 +386,15 @@ impl PillGame for Game {
                                     0.0..=1.5,
                                 )
                                 .step_by(0.01)
-                                .text("Surface band ±"),
+                                .text("Fade height"),
+                            );
+                            ui.add(
+                                egui::Slider::new(
+                                    &mut player_physics.particle_underwater_depth,
+                                    0.0..=6.0,
+                                )
+                                .step_by(0.01)
+                                .text("Underwater depth"),
                             );
                             let height = player_emission_height
                                 .lock()
@@ -394,12 +402,23 @@ impl PillGame for Game {
                                 .unwrap_or(f32::NAN);
                             let center = player_physics.particle_surface_center;
                             let band = player_physics.particle_surface_band.max(0.0);
-                            let on_surface = (height - center).abs() <= band;
+                            let underwater = player_physics.particle_underwater_depth.max(0.0);
+                            let fade_top = center + band;
+                            let (state, opacity) = if height < -underwater {
+                                ("underwater/red", 0.3)
+                            } else if height <= center {
+                                ("surface/green", 0.8)
+                            } else if band > 0.0 {
+                                (
+                                    "surface/green",
+                                    0.8 * ((fade_top - height) / band).clamp(0.0, 1.0),
+                                )
+                            } else {
+                                ("surface/green", 0.0)
+                            };
                             ui.label(format!(
-                                "P0 emission height: {height:.2} | band {:.2}..{:.2} ({})",
-                                center - band,
-                                center + band,
-                                if on_surface { "visible" } else { "transparent" }
+                                "P0 emission height: {height:.2} | {state} | fades out above {fade_top:.2} ({:.0}% opacity)",
+                                opacity * 100.0
                             ));
                         });
                 });

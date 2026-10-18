@@ -11,6 +11,12 @@ const MAX_PARTICLES: usize = 1024;
 
 /// Opacity of a particle emitted from inside the water-surface band.
 const SURFACE_OPACITY: f32 = 0.8;
+/// Opacity of a particle emitted from below the water surface.
+const UNDERWATER_OPACITY: f32 = 0.3;
+/// Tint of particles emitted at/above the water surface.
+const SURFACE_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
+/// Tint of particles emitted below the water surface.
+const UNDERWATER_COLOR: [f32; 3] = [0.7, 0.7, 1.0];
 
 const BIND_GROUP_FRAME: usize = 0;
 const BIND_GROUP_TEXTURE: usize = 1;
@@ -25,6 +31,8 @@ pub struct Particle {
     pub age: f32,
     /// Opacity chosen at spawn from the emission height relative to the water surface.
     pub alpha: f32,
+    /// Linear RGB tint chosen at spawn (red under water, green at the surface).
+    pub tint: [f32; 3],
 }
 
 // CPU-simulated particle emitter. Any entity with this component emits particles at its
@@ -57,13 +65,19 @@ define_component!(ParticleSystemComponent {
     emitting: bool,
     // Water surface height under the emitter, refreshed every frame by the player system.
     water_level: f32,
-    // Emission height (relative to the water) that counts as being on the surface.
+    // Emission height (relative to the water) at or below which particles are fully opaque.
     surface_center: f32,
-    // Half-width of the surface band: inside it particles are drawn at SURFACE_OPACITY,
-    // outside it they are fully transparent.
+    // Height range ABOVE `surface_center` over which the opacity fades to zero, so foam is drawn
+    // at and under the surface and disappears once the source leaves the water.
     surface_band: f32,
+    // How far BELOW the water the emission point has to be before it counts as underwater
+    // (red, faint). A floating ship sits a little below the surface, so this offset keeps it in
+    // the green surface state; only real dives go red.
+    underwater_depth: f32,
     // X offset of the spawn point from the entity position (mirrored by the player's flip).
     spawn_offset_x: f32,
+    // Y offset of the spawn point from the entity position (positive = emitted higher).
+    spawn_offset_y: f32,
     // Alive particles, preallocated by `new` to avoid per-spawn allocations.
     particles: Vec<Particle>,
     // Fractional emission carry between frames.
@@ -87,10 +101,12 @@ impl ParticleSystemComponent {
             spawn_spread: 0.6,
             enabled: true,
             water_level: 0.0,
-            surface_center: -1.45,
-            surface_band: 0.2,
+            surface_center: 0.2,
+            surface_band: 0.4,
+            underwater_depth: 2.5,
             emitting: false,
             spawn_offset_x: 0.0,
+            spawn_offset_y: 1.0,
             particles: Vec::with_capacity(MAX_PARTICLES_PER_SYSTEM),
             spawn_accumulator: 0.0,
         }
@@ -99,9 +115,9 @@ impl ParticleSystemComponent {
     /// Refreshes this frame's player state.
     ///
     /// Particles spawn only while `thrusting` is true; the water surface then decides each
-    /// particle's opacity at spawn time. A particle is drawn when the emission point
-    /// (`entity position + spawn_offset_x`) sits within `surface_band` world units of
-    /// `surface_center` (measured relative to the water level), otherwise it is fully transparent.
+    /// particle's colour and opacity at spawn time: green at/above the surface, red and faint once
+    /// the emission point is more than `underwater_depth` below the water, fading to invisible
+    /// above `surface_center`.
     ///
     /// `thrust_input` is the raw input axis; the ship's applied thrust is `-thrust_input`, so new
     /// particles are pushed in the opposite direction (exhaust behind the ship). `flip` mirrors
@@ -114,12 +130,14 @@ impl ParticleSystemComponent {
         water_level: f32,
         surface_center: f32,
         surface_band: f32,
+        underwater_depth: f32,
     ) {
         self.emitting = thrusting;
         self.spawn_offset_x = 8.0 * flip as f32;
         self.water_level = water_level;
         self.surface_center = surface_center;
         self.surface_band = surface_band.max(0.0);
+        self.underwater_depth = underwater_depth.max(0.0);
         if thrusting {
             self.initial_force = Vector3f::new(thrust_input.signum() * 15.0, 0.0, 0.0);
         }
@@ -363,9 +381,9 @@ impl Pass for ParticlePass {
                     center: particle.position.to_array(),
                     size: system.particle_size,
                     color: [
-                        system.color[0],
-                        system.color[1],
-                        system.color[2],
+                        system.color[0] * particle.tint[0],
+                        system.color[1] * particle.tint[1],
+                        system.color[2] * particle.tint[2],
                         system.color[3] * fade * particle.alpha,
                     ],
                 });
@@ -498,7 +516,8 @@ fn particle_system_update(engine: &mut Engine) -> Result<()> {
             && system.rate_per_second > 0.0
             && system.lifetime > 0.0;
         if can_emit {
-            let source = transform.position + Vector3f::new(system.spawn_offset_x, 0.0, 0.0);
+            let source = transform.position
+                + Vector3f::new(system.spawn_offset_x, system.spawn_offset_y, 0.0);
             // Fixed-rate emission with a carry accumulator: no allocations after the Vec is warm.
             system.spawn_accumulator += system.rate_per_second * delta_time;
             while system.spawn_accumulator >= 1.0 {
@@ -515,13 +534,20 @@ fn particle_system_update(engine: &mut Engine) -> Result<()> {
                 } else {
                     Vector3f::ZERO
                 };
-                // Opacity from the emission point's height relative to the water surface:
-                // inside the surface band -> 0.8, anywhere else -> 0.0.
-                let emission_height = (source.y - system.water_level) - system.surface_center;
-                let alpha = if emission_height.abs() <= system.surface_band {
-                    SURFACE_OPACITY
+                // Colour and opacity by where the emission point sits relative to the water
+                // surface: red when well under the water, green at the surface, fading out above.
+                let emission_height = source.y - system.water_level;
+                let (tint, alpha) = if emission_height < -system.underwater_depth {
+                    (UNDERWATER_COLOR, UNDERWATER_OPACITY)
+                } else if emission_height <= system.surface_center {
+                    (SURFACE_COLOR, SURFACE_OPACITY)
+                } else if system.surface_band > 0.0 {
+                    let t = ((system.surface_center + system.surface_band - emission_height)
+                        / system.surface_band)
+                        .clamp(0.0, 1.0);
+                    (SURFACE_COLOR, SURFACE_OPACITY * t)
                 } else {
-                    0.0
+                    (SURFACE_COLOR, 0.0)
                 };
                 system.particles.push(Particle {
                     position: source + jitter,
@@ -529,6 +555,7 @@ fn particle_system_update(engine: &mut Engine) -> Result<()> {
                     force: system.initial_force,
                     age: 0.0,
                     alpha,
+                    tint,
                 });
             }
             if system.particles.len() >= MAX_PARTICLES_PER_SYSTEM {

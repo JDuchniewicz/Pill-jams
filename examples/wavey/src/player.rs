@@ -90,13 +90,16 @@ pub struct PlayerPhysicsParams {
     /// Local height ABOVE the hull's physical bottom for the outer/center samples.
     pub hull_sample_y: f32,
     pub hull_center_y: f32,
-    /// Height of the emission point relative to the water surface that counts as "on the surface".
-    /// Particles spawned with `|emission_height - center| <= band` are drawn at 0.8 opacity, all
-    /// others at 0.0. A floating ship's origin sits roughly -1.55 world units below the water, so
-    /// that is the default centre.
+    /// Emission height relative to the water surface at/below which thrust particles are drawn
+    /// at full opacity; below the water they are drawn fainter, and above this height their
+    /// opacity fades to zero across `particle_surface_band`.
     pub particle_surface_center: f32,
-    /// Half-width of the surface band, in world units.
+    /// Height range above `particle_surface_center` over which the particle opacity fades out.
     pub particle_surface_band: f32,
+    /// How far below the water the emission point must be before particles turn red/faint. A
+    /// floating ship sits slightly below the water, so this offset keeps it in the green
+    /// "on the surface" state while normal dives go red.
+    pub particle_underwater_depth: f32,
     //Drag coefficients for the water
     //Linear drag force
     pub water_drag_linear: f32, // F = c1*v
@@ -114,7 +117,7 @@ impl Default for PlayerPhysicsParams {
             friction: 0.4,
             restitution: 0.0,
             linear_damping: 5.0,
-            angular_damping: 3.0,
+            angular_damping: 7.5,
             gravity_scale: 2.0,
             ccd_enabled: true,
             thrust_force: 750.0,
@@ -125,9 +128,10 @@ impl Default for PlayerPhysicsParams {
             hull_sample_x: 0.8,
             hull_sample_y: 0.22,
             hull_center_y: 0.25,
-            // Measured resting emission height of a floating ship (origin bobs around -1.45).
-            particle_surface_center: -1.45,
-            particle_surface_band: 0.2,
+            // Emit from just above the water line down; the fade hides foam when the ship jumps.
+            particle_surface_center: 0.2,
+            particle_surface_band: 0.4,
+            particle_underwater_depth: 2.5,
             water_drag_linear: 10.0,
             water_drag_quadratic: 0.0,
         }
@@ -535,15 +539,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
     }
 
-    // Publish the emission heights (the emitter spawns at the ship origin) for the particle UI.
-    {
-        let mut heights = emission_heights
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for entry in &ship_states {
-            heights[entry.1] = entry.8.y - entry.7;
-        }
-    }
+    // Emitters publish their emission-point height (spawn point, not the ship origin) below.
     let expected_hull_shape = ship_hull_shape(&params);
     let expected_aabb = expected_hull_shape.compute_local_aabb();
     let mut facing_updates = [None; NUM_PLAYERS as usize];
@@ -628,7 +624,9 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 desired_facing(-body.linvel().x, input_x, params.input_deadzone);
 
             // Apply thrust along X
-            let thrusting = input_x.abs() > params.input_deadzone && in_water;
+            // Horizontal thrust needs water contact; diving (S) thrusts regardless.
+            let thrusting = (input_x.abs() > params.input_deadzone && in_water)
+                || input_y > params.input_deadzone;
             emitter_states[player_index] = (thrusting, input_x, water_level);
 
             // Horizontal thrust is only available in water. There is no upward
@@ -711,19 +709,30 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
     }
 
-    // Feed this frame's player state into the particle emitters attached to the players.
-    for (_, player, emitter) in
-        engine.iterate_two_components_mut::<PlayerComponent, ParticleSystemComponent>()?
+    // Feed this frame's player state into the particle emitters attached to the players, and
+    // publish the emission-point height (entity position + the emitter's Y offset) for the UI.
     {
-        let (thrusting, input_x, water_level) = emitter_states[player.id as usize];
-        emitter.update_from_player(
-            thrusting,
-            input_x,
-            player.flip,
-            water_level,
-            params.particle_surface_center,
-            params.particle_surface_band,
-        );
+        let mut heights = emission_heights
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (_, player, emitter, transform) in engine.iterate_three_components_mut::<
+            PlayerComponent,
+            ParticleSystemComponent,
+            TransformComponent,
+        >()? {
+            let (thrusting, input_x, water_level) = emitter_states[player.id as usize];
+            emitter.update_from_player(
+                thrusting,
+                input_x,
+                player.flip,
+                water_level,
+                params.particle_surface_center,
+                params.particle_surface_band,
+                params.particle_underwater_depth,
+            );
+            heights[player.id as usize] =
+                transform.position.y + emitter.spawn_offset_y - water_level;
+        }
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
