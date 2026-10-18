@@ -55,6 +55,9 @@ pub struct EguiComponent {
     pub egui_client: Arc<EguiClient>,
     game_overlay: Option<DebugUiCallback>,
     registered_ui: Vec<RegisteredUi>,
+    // When false no UI function is built, so the egui pass draws nothing. Release builds start
+    // hidden; see `Engine::initialize`.
+    visible: bool,
 }
 
 impl Default for EguiComponent {
@@ -69,7 +72,19 @@ impl EguiComponent {
             egui_client: EguiClient::new(),
             game_overlay: None,
             registered_ui: Vec::new(),
+            visible: true,
         }
+    }
+
+    /// Whether the UI is drawn at all (engine windows plus game overlays).
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// Enables or disables the whole UI. Overlay/registered UI callbacks stay registered, so
+    /// turning it back on restores them as-is.
+    pub fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
     }
 
     pub fn set_overlay(&mut self, f: impl Fn(&egui::Context) + Send + Sync + 'static) {

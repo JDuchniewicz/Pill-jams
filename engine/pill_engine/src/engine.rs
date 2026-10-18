@@ -1,5 +1,5 @@
 use crate::{
-    app_config::{EngineConfig, EngineProcessInfo},
+    app_config::{CompileMode, EngineConfig, EngineProcessInfo},
     config::*,
     ecs::*,
     graphics::*,
@@ -275,7 +275,12 @@ impl Engine {
         ))?;
         #[cfg(feature = "ui")]
         {
-            self.add_global_component(EguiComponent::new())?;
+            let mut egui_component = EguiComponent::new();
+            // Release builds ship without any developer UI (tuning windows, engine stats).
+            if matches!(self.process.mode, CompileMode::Release) {
+                egui_component.set_visible(false);
+            }
+            self.add_global_component(egui_component)?;
             self.add_global_component(BuildStatusIndicatorComponent::default())?;
         }
 
@@ -774,6 +779,15 @@ impl Engine {
     }
 
     // --- UI API ---
+
+    /// Shows or hides every egui window: the engine debug window and the game overlay. Release
+    /// builds start hidden.
+    #[cfg(feature = "ui")]
+    pub fn set_ui_visible(&mut self, visible: bool) -> Result<()> {
+        self.get_global_component_mut::<crate::ecs::EguiComponent>()?
+            .set_visible(visible);
+        Ok(())
+    }
 
     /// Sets a game-defined egui overlay; called every frame before the engine debug window.
     #[cfg(feature = "ui")]
