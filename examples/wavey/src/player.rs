@@ -1,16 +1,17 @@
 use pill_engine::{define_component, define_global_component, game::*};
 
-use crate::sounds::schedule_audio;
+use crate::sounds::schedule_blare;
 use crate::sounds::SingleShotAudioComponent;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 
 use std::sync::{Arc, Mutex};
 
-define_component!(PlayerComponent { 
+define_component!(PlayerComponent {
     id: PlayerId,
-last_thrust_direction: Vector3f,
-air_time: f32 });
+    last_thrust_direction: Vector3f,
+    air_time: f32
+});
 
 // Live-tunable ship physics parameters, shared between the physics system and the
 // "Player physics" egui window.
@@ -607,15 +608,12 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 if horizontal_speed > 0.0 {
                     // AIR_DRAG_DECEL is a fraction of thrust per second airborne;
                     // convert it to an acceleration using the body's mass.
-                    let deceleration = params.thrust_force * AIR_DRAG_DECEL * air_time
-                        / body.mass().max(0.001);
+                    let deceleration =
+                        params.thrust_force * AIR_DRAG_DECEL * air_time / body.mass().max(0.001);
                     let delta_v = (deceleration * delta_time).min(horizontal_speed);
                     let new_velocity_x = velocity.x - velocity.x.signum() * delta_v;
 
-                    body.set_linvel(
-                        Vector3f::new(new_velocity_x, velocity.y, velocity.z),
-                        true,
-                    );
+                    body.set_linvel(Vector3f::new(new_velocity_x, velocity.y, velocity.z), true);
                 }
             }
 
@@ -687,7 +685,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
 
         if controls[player_component.id as usize].horn_blare {
-            schedule_audio(single_shot_audio)?;
+            schedule_blare(single_shot_audio)?;
         }
     }
 
