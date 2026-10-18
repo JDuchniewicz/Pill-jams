@@ -3,6 +3,7 @@ use pill_engine::{define_component, define_global_component, game::*};
 use crate::particle_system::ParticleSystemComponent;
 use crate::sounds::schedule_blare;
 use crate::sounds::SingleShotAudioComponent;
+use crate::sounds::BLARE_VOLUME;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
 use crate::water_floating::WaterFloatingComponent;
@@ -252,6 +253,7 @@ fn effective_ship_section(section: &str, facing: i32) -> &str {
 // Contact force is Rapier's total solved normal impulse divided by fixed dt.
 // Tune this against observed crashes; it is not an absolute real-world unit.
 const RAM_IMPACT_FORCE_THRESHOLD: f32 = 250.0;
+const RAM_IMPACT_FORCE_BOOST: f32 = 3000.0;
 
 /// React to physical hull impacts rather than raw sensor overlaps.
 /// The engine enriches a hull collision with its force and the active
@@ -266,22 +268,22 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // Snapshot sprite facing before borrowing ECS components again for effects.
+    // Snapshot player entity, facing, and gamepad PlayerId.
     let mut players = Vec::new();
     for (entity, player, _) in
         engine.iterate_two_components_mut::<PlayerComponent, RigidBodyComponent>()?
     {
-        players.push((entity, player.flip));
+        players.push((entity, player.flip, player.id));
     }
 
-    let mut horns_to_play = Vec::new();
+    // (attacker, victim, collision force)
+    let mut horns_to_play: Vec<(EntityHandle, EntityHandle, f32)> = Vec::new();
+
     for collision in collisions {
         if collision.phase != CollisionPhase::Started {
             continue;
         }
 
-        // Sensor-only events have no physical force. Ignore these until their
-        // corresponding solid hull contact is reported by Pill.
         let Some(force) = collision.force_magnitude else {
             continue;
         };
@@ -290,21 +292,20 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
             continue;
         }
 
-        let Some((_, a_flip)) = players
+        let Some((_, a_flip, _)) = players
             .iter()
-            .find(|(entity, _)| *entity == collision.a.entity)
-        else {
-            continue;
-        };
-        let Some((_, b_flip)) = players
-            .iter()
-            .find(|(entity, _)| *entity == collision.b.entity)
+            .find(|(entity, _, _)| *entity == collision.a.entity)
         else {
             continue;
         };
 
-        // These are the sensor pairs which were overlapping when the hulls
-        // collided. A real ram is front -> back in the ships' current facings.
+        let Some((_, b_flip, _)) = players
+            .iter()
+            .find(|(entity, _, _)| *entity == collision.b.entity)
+        else {
+            continue;
+        };
+
         for zones in &collision.zone_contacts {
             let part_a = effective_ship_section(&zones.a.part, *a_flip);
             let part_b = effective_ship_section(&zones.b.part, *b_flip);
@@ -315,12 +316,20 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
                 _ => continue,
             };
 
-            println!("[SHIP RAM] bow of {attacker:?} hit stern of {victim:?} (force: {force:.1})");
-            if !horns_to_play.contains(&attacker) {
-                horns_to_play.push(attacker);
+            println!(
+                "[SHIP RAM] bow of {attacker:?} hit stern of {victim:?} \
+                 (force: {force:.1})"
+            );
+
+            if let Some((_, _, existing_force)) = horns_to_play
+                .iter_mut()
+                .find(|(entity, _, _)| *entity == attacker)
+            {
+                *existing_force = existing_force.max(force);
+            } else {
+                horns_to_play.push((attacker, victim, force));
             }
-            // A ship pair may have multiple sensor overlaps, but one impact
-            // should produce just one response.
+
             break;
         }
     }
@@ -329,17 +338,58 @@ fn ship_collision_system(engine: &mut Engine) -> Result<()> {
         return Ok(());
     }
 
-    // Preserve the newer game's hit effects and their internal cooldowns.
+    // Trigger visual effects.
     crate::effects::push_collision_effects(engine)?;
 
-    // Use the existing single-shot sound system; never hold a physics-world
-    // borrow while accessing sound ECS components.
-    for (entity, _player, audio) in
+    // Horn only on the attacking ship.
+    for (entity, _, audio) in
         engine.iterate_two_components_mut::<PlayerComponent, SingleShotAudioComponent>()?
     {
-        if horns_to_play.contains(&entity) {
-            schedule_blare(audio)?;
+        if horns_to_play
+            .iter()
+            .any(|(attacker, _, _)| *attacker == entity)
+        {
+            schedule_blare(audio, true)?;
         }
+    }
+
+    // Collect rumble requests for BOTH attacker and victim.
+    // Keep only the strongest impact per ship this frame.
+    let mut rumbles: Vec<(EntityHandle, f32)> = Vec::new();
+
+    for &(attacker, victim, force) in &horns_to_play {
+        for entity in [attacker, victim] {
+            if let Some((_, existing_force)) =
+                rumbles.iter_mut().find(|(handle, _)| *handle == entity)
+            {
+                *existing_force = existing_force.max(force);
+            } else {
+                rumbles.push((entity, force));
+            }
+        }
+    }
+
+    // Map EntityHandle -> PlayerId and send rumble.
+    let input = engine.get_global_component_mut::<InputComponent>()?;
+
+    for (entity, force) in rumbles {
+        let Some((_, _, player_id)) = players.iter().find(|(handle, _, _)| *handle == entity)
+        else {
+            continue;
+        };
+
+        let strength = if force > RAM_IMPACT_FORCE_BOOST {
+            1.0
+        } else {
+            0.5
+        };
+
+        input.enqueue_rumble(*player_id, strength, strength, 500);
+
+        println!(
+            "[RUMBLE] Player: {:?}, Force: {:.1}, Strength: {:.1}",
+            player_id, force, strength
+        );
     }
 
     Ok(())
@@ -428,7 +478,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
         .with_component(
             AudioSourceComponent::builder()
                 .sound_type(SoundType::Sound2D)
-                .volume(0.25)
+                .volume(BLARE_VOLUME)
                 .play_on_awake(false)
                 .build(),
         )
@@ -509,8 +559,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
     let input = engine.get_global_component::<InputComponent>()?;
     let keyboard_x =
         (input.get_key(KeyboardKey::KeyD) as i32 - input.get_key(KeyboardKey::KeyA) as i32) as f32;
-    let keyboard_dive =
-        input.get_key(KeyboardKey::KeyS);
+    let keyboard_dive = input.get_key(KeyboardKey::KeyS);
     let keyboard_bomb = input.get_key_pressed(KeyboardKey::Space);
     let keyboard_blare = input.get_key_pressed(KeyboardKey::ControlLeft);
 
@@ -521,7 +570,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
             movement_x: input.get_gamepad_axis(id, GamepadAxis::LeftStickX)
                 + if i == 0 { keyboard_x } else { 0.0 },
             movement_y: input.get_gamepad_button_pressed(id, GamepadButton::A)
-                || ( i == 0 && keyboard_dive),
+                || (i == 0 && keyboard_dive),
             drop_bomb: input.get_gamepad_button_pressed(id, GamepadButton::X)
                 || (i == 0 && keyboard_bomb),
             horn_blare: input.get_gamepad_button_pressed(id, GamepadButton::Y)
@@ -797,8 +846,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             // Apply thrust along X
             // Horizontal thrust needs water contact; diving (S) thrusts regardless.
-            let thrusting = (input_x.abs() > params.input_deadzone && in_water)
-                || input_y;
+            let thrusting = (input_x.abs() > params.input_deadzone && in_water) || input_y;
             emitter_states[player_index] = (thrusting, input_x, water_level);
 
             // Horizontal thrust is only available in water. There is no upward
@@ -936,7 +984,7 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
         }
 
         if controls[player_component.id as usize].horn_blare {
-            schedule_blare(single_shot_audio)?;
+            schedule_blare(single_shot_audio, false)?;
         }
     }
 
