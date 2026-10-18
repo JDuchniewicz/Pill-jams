@@ -47,6 +47,8 @@ pub struct Engine {
     pub(crate) custom_render_passes: Vec<Box<dyn Pass>>,
     // Game-defined passes that run before the opaque PBR pass (background fillers)
     pub(crate) background_render_passes: Vec<Box<dyn Pass>>,
+    // Game-defined post-process passes, run after all scene content and before tonemapping
+    pub(crate) post_process_render_passes: Vec<Box<dyn Pass>>,
 }
 
 // ---- INTERNAL -----------------------------------------------------------------
@@ -81,6 +83,7 @@ impl Engine {
             frame_delta_time: 0.0,
             custom_render_passes: Vec::new(),
             background_render_passes: Vec::new(),
+            post_process_render_passes: Vec::new(),
         }
     }
 
@@ -106,6 +109,7 @@ impl Engine {
             frame_delta_time: 0.0,
             custom_render_passes: Vec::new(),
             background_render_passes: Vec::new(),
+            post_process_render_passes: Vec::new(),
         }
     }
 
@@ -590,6 +594,28 @@ impl Engine {
             self.background_render_passes.push(pass);
             Ok(())
         }
+    }
+
+    /// Adds a game-defined **post-process** pass, run after every scene pass (opaque geometry,
+    /// game passes, sprites and debug primitives) and immediately before tonemapping.
+    ///
+    /// The pass samples `RenderStateComponent::hdr_target()` and renders into
+    /// `RenderStateComponent::post_process_target()`, which the tonemap pass then resolves into the
+    /// window. Only one post-process pass is supported per frame.
+    pub fn add_post_process_pass(&mut self, pass: Box<dyn Pass>) -> Result<()> {
+        if self
+            .get_global_component::<RenderStateComponent>()?
+            .boot_done
+        {
+            // The post-process target and its chain slot are created once, before the first frame.
+            return Err(EngineError::Other(
+                "add_post_process_pass must be called before the first frame".to_string(),
+            )
+            .into());
+        }
+        // Registered before the first frame: `default_pass_chain` wires the target and the chain.
+        self.post_process_render_passes.push(pass);
+        Ok(())
     }
 
     // --- Primitive drawing API ---

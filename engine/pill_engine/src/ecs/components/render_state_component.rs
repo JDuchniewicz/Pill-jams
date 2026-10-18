@@ -24,6 +24,9 @@ pub struct RenderStateComponent {
     pub(crate) depth_target: PassTextureHandle,
     /// Engine default IBL maps (diffuse, specular, BRDF LUT): used when a game-set handle is invalid.
     pub(crate) default_ibl: [PassTextureHandle; 3],
+    /// Destination of the game post-process pass, when one is registered; the tonemap pass then
+    /// resolves this target instead of `hdr_target`.
+    pub(crate) post_process_target: Option<PassTextureHandle>,
     /// Environment (equirect) image drawn behind the scene; `None` draws `background_color`.
     pub background: Option<PassTextureHandle>,
     /// `true` when a game-defined background pass (`Engine::add_background_pass`) runs before the
@@ -50,6 +53,7 @@ impl RenderStateComponent {
             hdr_target: PassTextureHandle::default(),
             depth_target: PassTextureHandle::default(),
             default_ibl: [PassTextureHandle::default(); 3],
+            post_process_target: None,
             background: None,
             has_background_pass: false,
             background_color: [0.15, 0.15, 0.15],
@@ -74,6 +78,12 @@ impl RenderStateComponent {
     /// Scene depth target (DEPTH_TARGET_FORMAT) for game-defined passes.
     pub fn depth_target(&self) -> PassTextureHandle {
         self.depth_target
+    }
+
+    /// Destination of the game post-process pass, if one is registered (see
+    /// `Engine::add_post_process_pass`). The pass samples `hdr_target` and renders here.
+    pub fn post_process_target(&self) -> Option<PassTextureHandle> {
+        self.post_process_target
     }
 
     /// `true` when a game-defined background pass already filled the scene color this frame.

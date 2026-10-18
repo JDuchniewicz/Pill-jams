@@ -103,6 +103,9 @@ pub const EGUI_SYSTEM: SystemConfig = SystemConfig {
 
 pub const HDR_TARGET_NAME: &str = "hdr_target";
 pub const HDR_TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Destination of the game post-process pass (`Engine::add_post_process_pass`); created only when
+/// such a pass is registered.
+pub const POST_PROCESS_TARGET_NAME: &str = "post_process_target";
 pub const DEPTH_TARGET_NAME: &str = "depth_target";
 pub const DEPTH_TARGET_FORMAT: wgpu::TextureFormat = RendererTexture::DEPTH_FORMAT;
 
@@ -152,9 +155,23 @@ pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
     // Game-defined background passes run before the opaque PBR pass and fill the scene color.
     let mut background_passes = std::mem::take(&mut engine.background_render_passes);
 
+    // Game-defined post-process passes need their own destination: they sample the HDR scene
+    // target and the tonemap pass resolves their output instead.
+    let mut post_process_passes = std::mem::take(&mut engine.post_process_render_passes);
+    let post_process_target = if post_process_passes.is_empty() {
+        None
+    } else {
+        Some(engine.renderer.create_render_target(RendererTargetDesc {
+            name: POST_PROCESS_TARGET_NAME.to_string(),
+            format: HDR_TARGET_FORMAT,
+            size: TargetSize::Surface,
+        })?)
+    };
+
     let render_state = engine.get_global_component_mut::<RenderStateComponent>()?;
     render_state.hdr_target = hdr_target;
     render_state.depth_target = depth_target;
+    render_state.post_process_target = post_process_target;
     // With a background pass the PBR pass loads the color instead of clearing it
     render_state.set_has_background_pass(!background_passes.is_empty());
     // Engine defaults, not the game's handles: the pass falls back to these if the game's are invalid
@@ -178,7 +195,12 @@ pub fn default_pass_chain(engine: &mut Engine) -> Result<Vec<Box<dyn Pass>>> {
     passes.push(Box::new(PassSprites::new(hdr_target, depth_target)));
     // Queued lines/points draw over scene and game-pass content; both are HDR scene passes.
     passes.push(Box::new(PassPrimitives::new(hdr_target, depth_target)));
-    passes.push(Box::new(PassTonemap::new(hdr_target)));
+    // Game post-process passes see the fully composed scene (sprites and debug primitives included).
+    passes.append(&mut post_process_passes);
+    // The tonemap resolves whatever holds the final scene color.
+    passes.push(Box::new(PassTonemap::new(
+        post_process_target.unwrap_or(hdr_target),
+    )));
 
     #[cfg(feature = "ui")]
     {

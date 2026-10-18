@@ -1,6 +1,7 @@
 use crate::background_pass::{BackgroundQuadPass, SkyParams};
 use crate::cartoon_pass::{CartoonComponent, CartoonPass};
 use crate::player::PlayerPhysicsComponent;
+use crate::post_process::{PostProcessParams, PostProcessPass};
 use crate::water::WaterParamsComponent;
 use crate::water_mesh::WaterLookParams;
 use pill_engine::{define_global_component, game::*};
@@ -18,6 +19,7 @@ define_global_component!(GameUIStateComponent {
     show_uv2: Arc<Mutex<bool>>,
     sky: Arc<Mutex<SkyParams>>,
     water_look: Arc<Mutex<WaterLookParams>>,
+    post_process: Arc<Mutex<PostProcessParams>>,
 });
 
 pub struct Game {}
@@ -52,6 +54,8 @@ impl PillGame for Game {
         engine.add_render_pass(Box::new(CartoonPass::new()))?;
         // 2D sky & water gradient: a background pass, runs before the opaque PBR pass
         engine.add_background_pass(Box::new(BackgroundQuadPass::new()))?;
+        // Contrast/gamma, chromatic aberration and vignette over the whole composed frame
+        engine.add_post_process_pass(Box::new(PostProcessPass::new()))?;
         // --- Camera scale UI ---
 
         let ortho_size = Arc::new(Mutex::new(200.0_f32));
@@ -60,6 +64,7 @@ impl PillGame for Game {
         let show_uv2 = Arc::new(Mutex::new(false));
         let sky = Arc::new(Mutex::new(SkyParams::default()));
         let water_look = Arc::new(Mutex::new(WaterLookParams::default()));
+        let post_process = Arc::new(Mutex::new(PostProcessParams::default()));
         // Shared with `player::player_movement_system`; created in `player::start`.
         let player_physics = engine
             .get_global_component::<PlayerPhysicsComponent>()?
@@ -77,6 +82,7 @@ impl PillGame for Game {
             show_uv2: Arc::clone(&show_uv2),
             sky: Arc::clone(&sky),
             water_look: Arc::clone(&water_look),
+            post_process: Arc::clone(&post_process),
         })?;
         engine.set_game_overlay(move |ctx| {
             let ortho_size = *ortho_size
@@ -93,6 +99,9 @@ impl PillGame for Game {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut sky = sky.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
             let mut water_look = water_look
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let mut post_process = post_process
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             egui::Window::new("Wavey")
@@ -189,10 +198,12 @@ impl PillGame for Game {
             let mut player_physics = player_physics
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Initial right-hand column position; the windows stay freely movable/closeable.
+            let right_x = (ctx.screen_rect().width() - 300.0).max(10.0);
             egui::Window::new("Player physics")
-                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 160.0))
                 .resizable(true)
                 .default_width(280.0)
+                .default_pos(egui::pos2(right_x, 160.0))
                 .show(ctx, |ui| {
                     egui::CollapsingHeader::new("Hull & mass")
                         .default_open(true)
@@ -295,9 +306,9 @@ impl PillGame for Game {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             egui::Window::new("Water simulation")
-                .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-10.0, 470.0))
                 .resizable(true)
                 .default_width(280.0)
+                .default_pos(egui::pos2(right_x, 520.0))
                 .show(ctx, |ui| {
                     egui::CollapsingHeader::new("Wave equation")
                         .default_open(true)
@@ -403,6 +414,54 @@ impl PillGame for Game {
                             ui.add(
                                 egui::Slider::new(&mut water_params.height_sample_limit, 1..=128)
                                     .text("Sample limit"),
+                            );
+                        });
+                });
+
+            // --- Post-processing: one pass, three shader sections ---
+            egui::Window::new("Post processing")
+                .resizable(true)
+                .default_width(280.0)
+                .default_pos(egui::pos2(
+                    10.0,
+                    (ctx.screen_rect().height() - 420.0).max(10.0),
+                ))
+                .show(ctx, |ui| {
+                    egui::CollapsingHeader::new("1. Contrast & gamma")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut post_process.contrast, 0.0..=3.0)
+                                    .text("Contrast"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut post_process.gamma, 0.2..=3.0).text("Gamma"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("2. Chromatic aberration")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut post_process.aberration_strength, 0.0..=0.1)
+                                    .text("Strength"),
+                            );
+                        });
+
+                    egui::CollapsingHeader::new("3. Vignette")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Slider::new(&mut post_process.vignette_strength, 0.0..=1.0)
+                                    .text("Strength"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut post_process.vignette_radius, 0.0..=1.0)
+                                    .text("Radius"),
+                            );
+                            ui.add(
+                                egui::Slider::new(&mut post_process.vignette_softness, 0.001..=1.0)
+                                    .text("Softness"),
                             );
                         });
                 });
