@@ -234,12 +234,6 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 true,
             );
         }
-
-        //constant downward force due to ship weight
-        body.add_force(
-            Vector3f::new(0.0, -SHIP_MASS * BUOYANCY_STRENGTH, 0.0),
-            true,
-        );
     }
 
     let mut bomb_positions: Vec<(f32, f32)> = Vec::new();
