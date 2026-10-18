@@ -49,6 +49,7 @@ impl PillGame for Game {
         // --- Visuals setup ---
         crate::visuals::start(engine, active_scene)?;
         let players = crate::player::start(engine, active_scene).unwrap();
+        crate::duck::start(engine, active_scene)?;
         crate::sounds::start(engine, active_scene, players)?;
 
         // Add render passes

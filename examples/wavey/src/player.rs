@@ -5,6 +5,7 @@ use crate::sounds::schedule_blare;
 use crate::sounds::SingleShotAudioComponent;
 use crate::water::add_bomb;
 use crate::water::water_height_at_x;
+use crate::water_floating::WaterFloatingComponent;
 
 use std::sync::{Arc, Mutex};
 
@@ -51,7 +52,7 @@ const DIVE_THRUST_MULTIPLIER: f32 = 10.0;
 // Keep the total mass at `ship_mass`, but concentrate most of it near the ship
 // origin (below the painted hull), rather than the centroid of the raised shape.
 // This is physical ballast, not a fake restoring torque.
-const HULL_GEOMETRY_MASS_FRACTION: f32 = 0.15;
+pub(crate) const HULL_GEOMETRY_MASS_FRACTION: f32 = 0.15;
 
 /// Every tunable of the ship physics, live-edited from the "Player physics" egui window.
 #[derive(Clone, Debug)]
@@ -134,7 +135,7 @@ impl Default for PlayerPhysicsParams {
 /// Two 3D convex prisms: the painted trapezoidal hull and the wheelhouse.
 /// Coordinates are in LOCAL 20x20 sprite space, not pixel space.
 /// Shape is slightly larger than the white art for robust contact handling.
-fn ship_hull_shape(params: &PlayerPhysicsParams) -> SharedShape {
+pub(crate) fn ship_hull_shape(params: &PlayerPhysicsParams) -> SharedShape {
     let world_x = |px: f32| {
         (px / SHIP_ART_SIZE - 0.5)
             * SHIP_SPRITE_SIZE
@@ -194,6 +195,11 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
 
     // Particle emitters live on the player entities; the pass draws every emitter in one call.
     crate::particle_system::start(engine, active_scene)?;
+
+    // Water floating physics (buoyancy, drag, slope) is shared with ducks. It must be registered
+    // before the player system: it clears the per-frame forces and measures the water state that
+    // the player system then reads and adds thrust on top of.
+    crate::water_floating::start(engine, active_scene)?;
 
     // Shared, live-editable physics parameters (also read by the "Player physics" egui window).
     let player_physics = Arc::new(Mutex::new(PlayerPhysicsParams::default()));
@@ -261,6 +267,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
         })
+        .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
         .with_component(
             AudioSourceComponent::builder()
                 .sound_type(SoundType::Sound2D)
@@ -316,6 +323,7 @@ pub fn start(engine: &mut Engine, active_scene: SceneHandle) -> Result<Vec<Entit
             last_thrust_direction: Vector3f::new(0.0, 0.0, 0.0),
             air_time: 0.0,
         })
+        .with_component(WaterFloatingComponent::new(ship_buoyancy_points(&physics)))
         .with_component(
             AudioSourceComponent::builder()
                 .sound_type(SoundType::Sound2D)
@@ -370,7 +378,7 @@ fn read_ship_controls(engine: &Engine) -> Result<[ShipControls; NUM_PLAYERS as u
     }))
 }
 
-fn ship_buoyancy_points(params: &PlayerPhysicsParams) -> [Vector3f; 3] {
+pub(crate) fn ship_buoyancy_points(params: &PlayerPhysicsParams) -> [Vector3f; 3] {
     let sample_x = params.hull_half_width * params.hull_sample_x.clamp(0.0, 0.95);
     let hull_bottom_y = DECK_LOCAL_Y - 2.0 * params.hull_half_height;
     [
@@ -378,6 +386,41 @@ fn ship_buoyancy_points(params: &PlayerPhysicsParams) -> [Vector3f; 3] {
         Vector3f::new(0.0, hull_bottom_y + params.hull_center_y, 0.0),
         Vector3f::new(sample_x, hull_bottom_y + params.hull_sample_y, 0.0),
     ]
+}
+
+/// Gives a non-player floating entity (e.g. a duck) the same low ballast as the ships, so it
+/// floats upright instead of capsizing around the hull centroid.
+pub fn apply_float_ballast(
+    engine: &mut Engine,
+    entity: EntityHandle,
+    params: &PlayerPhysicsParams,
+) -> Result<()> {
+    let mut body_handle = None;
+    for (candidate, _, rb) in
+        engine.iterate_two_components_mut::<TransformComponent, RigidBodyComponent>()?
+    {
+        if candidate == entity {
+            body_handle = rb.get_rigid_body_handle();
+        }
+    }
+
+    let Some(handle) = body_handle else {
+        return Ok(());
+    };
+
+    let physics = engine.get_global_component_mut::<PhysicsWorldComponent>()?;
+    let Some(body) = physics.rigid_body_set.get_mut(handle) else {
+        return Ok(());
+    };
+
+    let mut ballast_props =
+        SharedShape::cuboid(params.hull_half_width * 0.7, 0.15, params.hull_half_depth)
+            .mass_properties(1.0);
+    ballast_props.set_mass(params.ship_mass * (1.0 - HULL_GEOMETRY_MASS_FRACTION), true);
+    body.set_additional_mass_properties(ballast_props, true);
+    body.recompute_mass_properties_from_colliders(&physics.collider_set);
+
+    Ok(())
 }
 
 /// Return `None` in the low-speed hysteresis band to retain the current facing.
@@ -409,26 +452,28 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     };
     let delta_time = engine.get_global_component::<TimeComponent>()?.delta_time;
 
-    let hull_points = ship_buoyancy_points(&params);
     let controls = read_ship_controls(engine)?;
 
-    // Collect player rigid body handles and input values
+    // Collect player rigid body handles, input values and this frame's water state. The floating
+    // system runs first, so `in_water` / `water_level` are already up to date.
     let mut ships = Vec::new();
 
-    for (_, rb, player) in
-        engine.iterate_two_components_mut::<RigidBodyComponent, PlayerComponent>()?
-    {
+    for (_, rb, player, floating) in engine.iterate_three_components_mut::<
+        RigidBodyComponent,
+        PlayerComponent,
+        WaterFloatingComponent,
+    >()? {
         if let Some(handle) = rb.get_rigid_body_handle() {
             let player_index = player.id as usize;
-            let input_x = controls[player_index].movement_x;
-            let input_y = controls[player_index].movement_y;
             ships.push((
                 handle,
                 player_index,
-                input_x,
-                input_y,
+                controls[player_index].movement_x,
+                controls[player_index].movement_y,
                 player.air_time,
                 player.last_thrust_direction,
+                floating.in_water,
+                floating.water_level,
             ));
         }
     }
@@ -437,13 +482,22 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
     let mut next_air_time = [0.0f32; NUM_PLAYERS as usize];
     let mut next_thrust_direction = [Vector3f::ZERO; NUM_PLAYERS as usize];
 
-    // Read body positions first. This borrow of the physics world must end before
-    // querying the water surface through the engine.
+    // Read body positions first; this physics borrow must end before touching the ECS again.
     let mut ship_states = Vec::new();
     {
         let physics = engine.get_global_component::<PhysicsWorldComponent>()?;
 
-        for (handle, player_index, input_x, input_y, air_time, last_thrust_direction) in ships {
+        for (
+            handle,
+            player_index,
+            input_x,
+            input_y,
+            air_time,
+            last_thrust_direction,
+            in_water,
+            water_level,
+        ) in ships
+        {
             // Preserve the previous state if this body is missing from the physics world.
             next_air_time[player_index] = air_time;
             next_thrust_direction[player_index] = last_thrust_direction;
@@ -459,78 +513,20 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 input_y,
                 air_time,
                 last_thrust_direction,
+                in_water,
+                water_level,
                 body.translation(),
-                body.rotation(),
             ));
         }
     }
 
-    // Compute buoyancy from the current water height
-    let mut ship_forces = Vec::with_capacity(ship_states.len());
-    for (
-        handle,
-        player_index,
-        input_x,
-        input_y,
-        air_time,
-        last_thrust_direction,
-        player_position,
-        player_rotation,
-    ) in ship_states
-    {
-        // store water samples at points
-        let mut water_samples = [(0.0f32, 0.0f32); 3];
-        // calculate the force triplet
-        let mut point_buoyancy_forces = Vec::with_capacity(3);
-        for (i, local_point) in hull_points.iter().enumerate() {
-            let world_point = player_position + player_rotation * local_point;
-            water_samples[i] = (world_point.x, water_height_at_x(engine, world_point.x)?);
-
-            let point_buoyancy_force = if world_point.y < water_samples[i].1 {
-                let depth = water_samples[i].1 - world_point.y;
-                Vector3f::new(
-                    0.0,
-                    depth * params.buoyancy_strength / hull_points.len() as f32,
-                    0.0,
-                )
-            } else {
-                Vector3f::new(0.0, 0.0, 0.0)
-            };
-            point_buoyancy_forces.push((world_point, point_buoyancy_force));
-        }
-
-        let dx = water_samples[2].0 - water_samples[0].0;
-        let slope = if dx.abs() > 0.001 {
-            (water_samples[2].1 - water_samples[0].1) / dx
-        } else {
-            0.0
-        };
-        // Water level under the ship and the height of the emission point (the ship origin, since
-        // the emitter only offsets on X) relative to that water level.
-        let water_level = water_samples[1].1;
-        let emission_height = player_position.y - water_level;
-        ship_forces.push((
-            handle,
-            player_index,
-            input_x,
-            input_y,
-            air_time,
-            last_thrust_direction,
-            point_buoyancy_forces,
-            slope,
-            water_level,
-            emission_height,
-        ));
-    }
-    // Apply thrust and buoyancy to Rapier's bodies.
-    // Construct the expected compound collider once, not every frame per ship.
-    // Publish the emission heights so the particle UI can display them live.
+    // Publish the emission heights (the emitter spawns at the ship origin) for the particle UI.
     {
         let mut heights = emission_heights
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for entry in &ship_forces {
-            heights[entry.1] = entry.9;
+        for entry in &ship_states {
+            heights[entry.1] = entry.8.y - entry.7;
         }
     }
     let expected_hull_shape = ship_hull_shape(&params);
@@ -548,11 +544,10 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
             input_y,
             mut air_time,
             mut last_thrust_direction,
-            point_buoyancy_forces,
-            slope,
+            in_water,
             water_level,
             _,
-        ) in ship_forces
+        ) in ship_states
         {
             let Some(body) = physics.rigid_body_set.get_mut(handle) else {
                 continue;
@@ -610,23 +605,12 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 }
             }
 
-            // Make ballast / collider mass-property changes effective *before* the
-            // buoyancy forces are applied at world points in this update.
+            // Make ballast / collider mass-property changes effective before the physics step.
             body.recompute_mass_properties_from_colliders(&physics.collider_set);
 
             // Decide sprite facing using horizontal velocity, before applying forces.
             facing_updates[player_index] =
                 desired_facing(-body.linvel().x, input_x, params.input_deadzone);
-
-            body.reset_forces(true);
-            body.reset_torques(true);
-
-            let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
-
-            let submerged_points = point_buoyancy_forces
-                .iter()
-                .filter(|(_, force)| force.y > 0.0)
-                .count();
 
             // Apply thrust along X
             let thrusting = input_x.abs() > params.input_deadzone && in_water;
@@ -673,38 +657,6 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             next_air_time[player_index] = air_time;
             next_thrust_direction[player_index] = last_thrust_direction;
-
-            let submersion = submerged_points as f32 / point_buoyancy_forces.len() as f32;
-            // Buoyancy pushes up while the player is below the water surface
-            for (world_point, buoyancy_force) in point_buoyancy_forces {
-                if buoyancy_force.y != 0.0 {
-                    body.add_force_at_point(buoyancy_force, world_point, true);
-                }
-            }
-            //Water drag: apply a linear+quadratic drag force based on the velocity of the ship in water
-            if submersion > 0.0 {
-                let velocity = body.linvel();
-                let speed = velocity.length();
-                if speed > 0.0 {
-                    let drag_coefficient =
-                        params.water_drag_linear + params.water_drag_quadratic * speed;
-                    let drag_force = velocity * -drag_coefficient * submersion;
-                    body.add_force(drag_force, true);
-                }
-            }
-
-            // Add the force of going up or down the slope
-            if in_water {
-                body.add_force(
-                    Vector3f::new(
-                        -slope.clamp(-params.slope_clamp, params.slope_clamp)
-                            * params.wave_slope_strength,
-                        0.0,
-                        0.0,
-                    ),
-                    true,
-                );
-            }
         }
     } // Release mutable physics-world borrow before accessing ECS sprites.
 
