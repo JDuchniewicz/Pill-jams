@@ -39,6 +39,10 @@ const HULL_CONTACT_MARGIN_X: f32 = 1.08;
 const HULL_CONTACT_MARGIN_Y: f32 = 1.18;
 const AIR_DRAG_DECEL: f32 = 0.5; // deceleration factor when ship is in air
 
+// Downward thrust multiplier. Must be large enough to beat the buoyancy force
+// (params.buoyancy_strength per unit of submersion) so the ship can dive.
+const DIVE_THRUST_MULTIPLIER: f32 = 10.0;
+
 // Keep the total mass at `ship_mass`, but concentrate most of it near the ship
 // origin (below the painted hull), rather than the centroid of the raised shape.
 // This is physical ballast, not a fake restoring torque.
@@ -573,10 +577,21 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
 
             let in_water = point_buoyancy_forces.iter().any(|(_, force)| force.y > 0.0);
 
-            // In water: full thrust along X. Remember the direction that was applied.
-            let direction_vector = Vector3f::new(-input_x, -input_y, 0.0).normalize_or_zero();
-            if (input_x.abs() > params.input_deadzone || input_y.abs() > params.input_deadzone) && in_water {
-                body.add_force(direction_vector * params.thrust_force, true);
+            // Horizontal thrust is only available in water. Vertical thrust is
+            // DOWNWARD only: holding W (or pushing the stick up) must not lift the
+            // ship, but holding S can drive it under the surface, beating buoyancy.
+            // Upward motion comes exclusively from buoyancy, which still allows jumps.
+            let mut thrust = Vector3f::ZERO;
+            if in_water && input_x.abs() > params.input_deadzone {
+                thrust.x = -input_x;
+            }
+            if input_y > params.input_deadzone {
+                thrust.y = -input_y * DIVE_THRUST_MULTIPLIER;
+            }
+
+            if thrust != Vector3f::ZERO {
+                body.add_force(thrust * params.thrust_force, true);
+                last_thrust_direction = thrust.normalize_or_zero();
             }
 
             // Airborne: no thrust, just coasting. Drag ramps with the time spent in
