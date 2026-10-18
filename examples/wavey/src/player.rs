@@ -48,8 +48,12 @@ const HULL_CONTACT_MARGIN_X: f32 = 1.08;
 const HULL_CONTACT_MARGIN_Y: f32 = 1.18;
 const AIR_DRAG_DECEL: f32 = 0.5; // deceleration factor when ship is in air
 
-const DIVE_CHARGE_MAX: f32 = 2.0;
-const DIVE_RELEASE_IMPULSE_PER_SECOND: f32 = 500.0;
+const DIVE_CHARGE_MAX: f32 = 5.0;
+const DIVE_CHARGE_MULTIPLIER: f32 = 10.0; // how fast the dive charge builds up
+                                          // Downward force applied during the release burst, as a multiple of thrust_force.
+                                          // A sustained force is needed: a single impulse is cancelled almost immediately
+                                          // by the quadratic water drag.
+const DIVE_BURST_THRUST_MULTIPLIER: f32 = 16.0;
 // Keep the total mass at `ship_mass`, but concentrate most of it near the ship
 // origin (below the painted hull), rather than the centroid of the raised shape.
 // This is physical ballast, not a fake restoring torque.
@@ -112,7 +116,7 @@ impl Default for PlayerPhysicsParams {
             restitution: 0.0,
             linear_damping: 5.0,
             angular_damping: 3.0,
-            gravity_scale: 1.0,
+            gravity_scale: 2.0,
             ccd_enabled: true,
             thrust_force: 750.0,
             input_deadzone: 0.1,
@@ -126,7 +130,7 @@ impl Default for PlayerPhysicsParams {
             particle_surface_center: -1.45,
             particle_surface_band: 0.2,
             water_drag_linear: 10.0,
-            water_drag_quadratic: 10.0,
+            water_drag_quadratic: 0.0,
         }
     }
 }
@@ -637,19 +641,30 @@ fn player_movement_system(engine: &mut Engine) -> Result<()> {
                 thrust.x = -input_x;
             }
             // Holding the dive input only charges the dive; it must not move the
-            // ship down. The downward impulse is applied once, on release,
-            // proportional to the held time and capped by DIVE_CHARGE_MAX.
+            // ship down. On release, the charge becomes a burst duration during
+            // which a strong downward force is applied (capped by DIVE_CHARGE_MAX).
             let diving = input_y > params.input_deadzone;
             if diving {
-                next_dive_hold_time[player_index] += delta_time;
+                next_dive_hold_time[player_index] += DIVE_CHARGE_MULTIPLIER * delta_time;
             } else {
                 if next_dive_was_held[player_index] {
-                    let charge = next_dive_hold_time[player_index].min(DIVE_CHARGE_MAX);
-                    let impulse =
-                        Vector3f::new(0.0, -charge * DIVE_RELEASE_IMPULSE_PER_SECOND, 0.0);
-                    body.apply_impulse(impulse, true);
+                    // Convert the accumulated charge into a burst duration.
+                    next_dive_hold_time[player_index] =
+                        next_dive_hold_time[player_index].min(DIVE_CHARGE_MAX);
                 }
-                next_dive_hold_time[player_index] = 0.0;
+
+                if next_dive_hold_time[player_index] > 0.0 {
+                    body.add_force(
+                        Vector3f::new(
+                            0.0,
+                            -params.thrust_force * DIVE_BURST_THRUST_MULTIPLIER,
+                            0.0,
+                        ),
+                        true,
+                    );
+                    next_dive_hold_time[player_index] =
+                        (next_dive_hold_time[player_index] - delta_time).max(0.0);
+                }
             }
             next_dive_was_held[player_index] = diving;
 
