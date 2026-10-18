@@ -17,6 +17,8 @@ const UNDERWATER_OPACITY: f32 = 0.3;
 const SURFACE_COLOR: [f32; 3] = [1.0, 1.0, 1.0];
 /// Tint of particles emitted below the water surface.
 const UNDERWATER_COLOR: [f32; 3] = [0.7, 0.7, 1.0];
+/// Fraction of the initial force kept by particles emitted under water (they start slower).
+const UNDERWATER_FORCE_SCALE: f32 = 0.5;
 
 const BIND_GROUP_FRAME: usize = 0;
 const BIND_GROUP_TEXTURE: usize = 1;
@@ -537,7 +539,8 @@ fn particle_system_update(engine: &mut Engine) -> Result<()> {
                 // Colour and opacity by where the emission point sits relative to the water
                 // surface: red when well under the water, green at the surface, fading out above.
                 let emission_height = source.y - system.water_level;
-                let (tint, alpha) = if emission_height < -system.underwater_depth {
+                let underwater = emission_height < -system.underwater_depth;
+                let (tint, alpha) = if underwater {
                     (UNDERWATER_COLOR, UNDERWATER_OPACITY)
                 } else if emission_height <= system.surface_center {
                     (SURFACE_COLOR, SURFACE_OPACITY)
@@ -549,10 +552,16 @@ fn particle_system_update(engine: &mut Engine) -> Result<()> {
                 } else {
                     (SURFACE_COLOR, 0.0)
                 };
+                // Water slows the exhaust down: underwater puffs start at half speed.
+                let initial_force = if underwater {
+                    system.initial_force * UNDERWATER_FORCE_SCALE
+                } else {
+                    system.initial_force
+                };
                 system.particles.push(Particle {
                     position: source + jitter,
                     velocity: Vector3f::ZERO,
-                    force: system.initial_force,
+                    force: initial_force,
                     age: 0.0,
                     alpha,
                     tint,

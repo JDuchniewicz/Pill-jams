@@ -262,7 +262,7 @@ impl PillGame for Game {
                         .default_open(true)
                         .show(ui, |ui| {
                             ui.add(
-                                egui::Slider::new(&mut player_physics.hull_half_width, 0.1..=5.0)
+                                egui::Slider::new(&mut player_physics.hull_half_width, 0.1..=35.0)
                                     .text("Hull half width"),
                             );
                             ui.add(
